@@ -81,7 +81,7 @@ class CSV():
             file_path = os.path.join(directory,f'{self.india_date}.csv')
             # get ticker
             row = [
-            tick['exchange_timestamp'].strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
+            tick['exchange_timestamp'],
             tick['instrument_token'],
             tick.get('last_price'),
             tick.get('last_traded_quantity'),

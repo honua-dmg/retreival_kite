@@ -7,6 +7,23 @@ from selenium.webdriver.chrome.options import Options
 import time
 import pyotp
 from kiteconnect import KiteConnect
+from datetime import datetime, timedelta
+
+def save_auth_code(new_auth_code, env_path=".env"):
+    # Load existing environment variables from the .env file
+    dotenv.load_dotenv(dotenv_path=env_path)
+    env_vars = dotenv.dotenv_values(env_path)
+
+    # Update with new values
+    env_vars["AUTH_CODE"] = new_auth_code
+    env_vars["AUTH_CODE_TIMESTAMP"] = datetime.now().isoformat()
+
+    # Write back to the .env file
+    with open(env_path, "w") as f:
+        for key, value in env_vars.items():
+            f.write(f"{key}={value}\n")
+
+
 def getAuth():
     """
     Authenticates the user with the Kite API using API key, secret, and TOTP-based 2FA.
@@ -34,6 +51,24 @@ def getAuth():
     user_id = os.getenv('USERID')
     password = os.getenv('PASSWORD')
     totp_key = os.getenv('TOTPKEY')
+
+    # we will first check our env file to see if we have an existing auth_code
+    # that is less than one day old, if it is, we'll return that.
+    auth_code = os.getenv("AUTH_CODE")
+    timestamp_str = os.getenv("AUTH_CODE_TIMESTAMP")
+
+    if auth_code and timestamp_str:
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str)
+            now = datetime.now()
+
+            if now - timestamp < timedelta(days=1):
+                print("✅ Auth code is still valid.")
+                return auth_code
+        except Exception as e:
+            pass
+
+
 
     # URL to initiate login
     login_url = f'https://kite.zerodha.com/connect/login?v=3&api_key={api_key}'
@@ -72,4 +107,5 @@ def getAuth():
     kite = KiteConnect(api_key=api_key) # might be an issue, look into it. 
     data = kite.generate_session(request_token, api_secret=api_secret)
     access_token = data["access_token"]
+    save_auth_code(access_token)
     return access_token
