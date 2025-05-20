@@ -17,7 +17,7 @@ import ssl
 import os
 from email.message import EmailMessage
 from dotenv import load_dotenv
-load_dotenv()
+
 
 HEARTBEAT_TIMEOUT = 20
 class Data():
@@ -127,6 +127,26 @@ def InitialiseProducer():
 
 
 
+def send_email_alert(subject, body):
+    email_address = os.getenv("EMAIL_ADDRESS")
+    email_password = os.getenv("EMAIL_PASSWORD")
+    to_email = os.getenv("TO_EMAIL")
+
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = email_address
+    msg['To'] = to_email
+    msg.set_content(body)
+
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, context=context) as smtp:
+            smtp.login(email_address, email_password)
+            smtp.send_message(msg)
+        print("✅ Email sent successfully.")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
+
 def heartbeat_monitor():
     p = InitialiseProducer()
     r = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)
@@ -160,9 +180,29 @@ def heartbeat_monitor():
                 p = InitialiseProducer()
                 counter +=1
                 print(f'***** counter:{counter}')
+                
+
                 if counter ==10:
+                    send_email_alert(
+                        subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")} KITE WEBSOCKET MALFUNCTION",
+                        body="Dear Guru Sai," \
+                        "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
+                        "needs your immediate attention.\n" \
+                        "Best regards,\n" \
+                        "Guru Sai. "
+                    )
                     break
             except Exception as e:
+                if counter==5:
+                    send_email_alert(
+                        subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")}",
+                        body=f"Dear Guru Sai," \
+                        "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
+                        "needs your immediate attention. The following error has been observed\n " \
+                        "{e}\n"\
+                        "Best regards,\n" \
+                        "Guru Sai. "
+                    )
                 print(f"⚠️ Reconnect failed: {e}")
         else:
             counter=0
