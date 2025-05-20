@@ -16,8 +16,8 @@ import smtplib
 import ssl
 import os
 from email.message import EmailMessage
-from dotenv import load_dotenv
 
+import logging
 
 HEARTBEAT_TIMEOUT = 20
 class Data():
@@ -127,6 +127,33 @@ def InitialiseProducer():
 
 
 
+
+def setup_logger(name='app_logger', log_dir='logs', log_file='error.log'):
+    # Ensure log directory exists
+    os.makedirs(log_dir, exist_ok=True)
+    
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)  # Capture all levels; filter handlers separately
+
+    # File handler for ERROR and above
+    fh = logging.FileHandler(os.path.join(log_dir, log_file))
+    fh.setLevel(logging.ERROR)
+    fh.setFormatter(logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    ))
+
+    # Optional: Console handler for INFO and above
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
+
+    # Avoid duplicate handlers if re-imported
+    if not logger.handlers:
+        logger.addHandler(fh)
+        logger.addHandler(ch)
+
+    return logger
+
 def send_email_alert(subject, body):
     email_address = os.getenv("EMAIL_ADDRESS")
     email_password = os.getenv("EMAIL_PASSWORD")
@@ -148,6 +175,7 @@ def send_email_alert(subject, body):
         print(f"❌ Failed to send email: {e}")
 
 def heartbeat_monitor():
+    logger = setup_logger()
     p = InitialiseProducer()
     r = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)
     try:
@@ -168,6 +196,7 @@ def heartbeat_monitor():
             p.terminate() # shutting the connection down
             print(f"terminating {p}")
             p.join()
+            r.set('end','true')
             break
 
         if diff > HEARTBEAT_TIMEOUT:
@@ -191,6 +220,7 @@ def heartbeat_monitor():
                         "Best regards,\n" \
                         "Guru Sai. "
                     )
+                    logger.error("TOO MANY RECONNECT ISSUES",exc_info=True)
                     break
             except Exception as e:
                 if counter==5:
@@ -203,7 +233,9 @@ def heartbeat_monitor():
                         "Best regards,\n" \
                         "Guru Sai. "
                     )
+                logger.error(f"RECONNECT ISSUES: {e}",exc_info=True)
                 print(f"⚠️ Reconnect failed: {e}")
+
         else:
             counter=0
             
