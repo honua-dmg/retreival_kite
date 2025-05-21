@@ -19,7 +19,7 @@ def saveData(directory):
             for uncoded_msg in stream[1]:
                 try:
                     data = json.loads(uncoded_msg[1]['data'])
-                    print(data)
+                    
                     worker.save_tick(data)
                 except Exception as e:
                     print(e)
