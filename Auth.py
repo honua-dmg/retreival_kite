@@ -57,16 +57,23 @@ def getAuth():
     auth_code = os.getenv("AUTH_CODE")
     timestamp_str = os.getenv("AUTH_CODE_TIMESTAMP")
 
+
     if auth_code and timestamp_str:
         try:
             timestamp = datetime.fromisoformat(timestamp_str)
             now = datetime.now()
 
-            if now - timestamp < timedelta(days=1):
-                print("✅ Auth code is still valid.")
+            # Get today's 6 AM datetime
+            six_am_today = datetime.combine(now.date(), time(6, 0))
+
+            if timestamp >= six_am_today:
+                print("✅ Auth code is still valid (obtained after 6 AM).")
                 return auth_code
+            else:
+                print("❌ Auth code was obtained before 6 AM. Fetching new code...")
         except Exception as e:
-            pass
+            print("⚠️ Error parsing timestamp, regenerating auth code...")
+
 
 
 
