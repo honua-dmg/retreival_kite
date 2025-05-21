@@ -7,7 +7,7 @@ from selenium.webdriver.chrome.options import Options
 import time
 import pyotp
 from kiteconnect import KiteConnect
-from datetime import datetime, timedelta
+import datetime as dt
 
 def save_auth_code(new_auth_code, env_path=".env"):
     # Load existing environment variables from the .env file
@@ -16,7 +16,7 @@ def save_auth_code(new_auth_code, env_path=".env"):
 
     # Update with new values
     env_vars["AUTH_CODE"] = new_auth_code
-    env_vars["AUTH_CODE_TIMESTAMP"] = datetime.now().isoformat()
+    env_vars["AUTH_CODE_TIMESTAMP"] = dt.datetime.now().isoformat()
 
     # Write back to the .env file
     with open(env_path, "w") as f:
@@ -60,11 +60,11 @@ def getAuth():
 
     if auth_code and timestamp_str:
         try:
-            timestamp = datetime.fromisoformat(timestamp_str)
-            now = datetime.now()
+            timestamp = dt.datetime.fromisoformat(timestamp_str)
+            now = dt.datetime.now()
 
             # Get today's 6 AM datetime
-            six_am_today = datetime.combine(now.date(), time(6, 0))
+            six_am_today = dt.datetime.combine(now.date(), dt.time(6, 0))
 
             if timestamp >= six_am_today:
                 print("✅ Auth code is still valid (obtained after 6 AM).")
