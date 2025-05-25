@@ -16,10 +16,12 @@ import smtplib
 import ssl
 import os
 from email.message import EmailMessage
+import requests
 
 import logging
 
 HEARTBEAT_TIMEOUT = 20
+SEND_MAIL_TIMEOUT = 200
 class Data():
     def __init__(self):
         self.api_key = os.getenv('APIKEY')
@@ -55,11 +57,12 @@ class Data():
         
     ##### WEBSOCKET FUNCTIONS ######
     def on_ticks(self,ws, ticks):
-        self.r.set('time',time.time())
+        
         for tick in ticks:
             
             #print(f"{self.ConvertToken(tick['instrument_token'])}: {tick}")
             if 'instrument_token' in tick.keys():
+                self.r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
                 tick['tradable'] = ''
                 self.r.xadd("data",{'data':json.dumps(tick,default=str)})
                 #self.save.save_tick(tick)
@@ -97,7 +100,7 @@ class Data():
     
     # Start WebSocket (blocking call)
     def open(self):
-        self.r.set('time',time.time())
+        self.r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
         self.kws = KiteTicker(self.api_key, self.access_token)
         self.kws.on_ticks = self.on_ticks
         self.kws.on_connect = self.on_connect
@@ -154,6 +157,19 @@ def setup_logger(name='app_logger', log_dir='logs', log_file='error.log'):
 
     return logger
 
+def is_connected():
+    try:
+        requests.get("https://www.google.com", timeout=5)
+        return True
+    except requests.RequestException:
+        return False
+
+# Example usage
+if is_connected():
+    print("✅ Internet is available.")
+else:
+    print("❌ No internet connection.")
+
 def send_email_alert(subject, body):
     email_address = os.getenv("EMAIL_ADDRESS")
     email_password = os.getenv("EMAIL_PASSWORD")
@@ -181,16 +197,16 @@ def heartbeat_monitor():
     try:
         last_tick_time = float(r.get('time'))
     except TypeError:
-        last_tick_time = time.time()
+        last_tick_time = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()
         r.set('time',last_tick_time)
-    counter = 0
+    
     while True:
         time.sleep(HEARTBEAT_TIMEOUT)
         last_tick_time = float(r.get('time'))
-        now = time.time()
+        now = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()
         diff = now - last_tick_time
 
-        now_time = dt.datetime.now()
+        now_time = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30)))
         if now_time.hour >= 15 and now_time.minute >= 30:
             print("Market closed (past 15:30). Shutting down heartbeat monitor.")
             p.terminate() # shutting the connection down
@@ -201,17 +217,10 @@ def heartbeat_monitor():
 
         if diff > HEARTBEAT_TIMEOUT:
             print(f"💔 No tick for {diff:.1f}s. Attempting reconnect...")
-            try:
-                p.terminate()
-                print(f"terminating {p}")
-                p.join()
-                time.sleep(2)  # short wait before reconnect
-                p = InitialiseProducer()
-                counter +=1
-                print(f'***** counter:{counter}')
-                
+            
 
-                if counter ==10:
+            if diff>SEND_MAIL_TIMEOUT:
+                if is_connected():
                     send_email_alert(
                         subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")} KITE WEBSOCKET MALFUNCTION",
                         body="Dear Guru Sai," \
@@ -220,23 +229,42 @@ def heartbeat_monitor():
                         "Best regards,\n" \
                         "Guru Sai. "
                     )
-                    logger.error("TOO MANY RECONNECT ISSUES",exc_info=True)
-                    break
+                else:
+                    logger.error(f"TOO MANY RECONNECT ISSUES at time: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"H:%M:%S")}",exc_info=True)
+                break
+            try:
+                # resetting the terminal link
+                p.terminate()
+                
+                p.join()
+                time.sleep(2)  # short wait before reconnect
+                p = InitialiseProducer()
+                
+                print(f'***** TIME:{diff}: time: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"H:%M:%S")}')
+                
+
             except Exception as e:
-                if counter==5:
-                    send_email_alert(
-                        subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")}",
-                        body=f"Dear Guru Sai," \
-                        "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
-                        "needs your immediate attention. The following error has been observed\n " \
-                        "{e}\n"\
-                        "Best regards,\n" \
-                        "Guru Sai. "
-                    )
+                if diff==SEND_MAIL_TIMEOUT/2:
+                    if is_connected():
+                        send_email_alert(
+                            subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")}",
+                            body=f"Dear Guru Sai," \
+                            "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
+                            "needs your immediate attention. The following error has been observed\n " \
+                            "{e}\n"\
+                            "Best regards,\n" \
+                            "Guru Sai. "
+                        )
+                    else:
+                        logger.error(f"internet not connected at time: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"H:%M:%S")}")
                 logger.error(f"RECONNECT ISSUES: {e}",exc_info=True)
                 print(f"⚠️ Reconnect failed: {e}")
 
-        else:
-            counter=0
+        
+def report(body):
+    send_email_alert(
+        subject= f" DATA REVIEW: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")}",
+        body= body
+    )
             
             

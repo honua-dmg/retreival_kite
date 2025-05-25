@@ -15,7 +15,7 @@ def begin(r):
     for thread in threading.enumerate():
         print(f"Name: {thread.name}, \n\tAlive: {thread.is_alive()}\tDaemon: {thread.daemon} ")
     r.set('end','false')
-    r.set('time',time.time())
+    r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
 
     consumer_thread = threading.Thread(target=saveData,args=(r'/Users/gurusai/data/kite',))
     producer_thread = threading.Thread(target=producer.heartbeat_monitor)
