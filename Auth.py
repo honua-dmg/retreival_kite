@@ -116,3 +116,7 @@ def getAuth():
     access_token = data["access_token"]
     save_auth_code(access_token)
     return access_token
+
+
+if __name__ == '__main__':
+    getAuth()

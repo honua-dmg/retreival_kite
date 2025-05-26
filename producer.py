@@ -11,13 +11,9 @@ import json
 import multiprocessing
 import Auth
 import datetime as dt
-
-import smtplib
-import ssl
-import os
-from email.message import EmailMessage
 import requests
 
+import Report
 import logging
 
 HEARTBEAT_TIMEOUT = 20
@@ -29,7 +25,7 @@ class Data():
         self.user_id = os.getenv('USERID')
         self.password = os.getenv('PASSWORD')
         self.totp_key = os.getenv('TOTPKEY')
-        self.stocks = os.getenv("STOCKS").strip('[]').split(",")
+        self.stocks = os.getenv("STOCKS").split(",")
         self.kite = KiteConnect(api_key=self.api_key) 
         nse = self.stockTokenMapping('NSE')
         bse = self.stockTokenMapping('BSE')
@@ -57,15 +53,17 @@ class Data():
         
     ##### WEBSOCKET FUNCTIONS ######
     def on_ticks(self,ws, ticks):
-        
+        """
+        we'll send each stock to a separate stream, consumers will decide which stream to subscribe to. 
+        """
         for tick in ticks:
             
             #print(f"{self.ConvertToken(tick['instrument_token'])}: {tick}")
             if 'instrument_token' in tick.keys():
                 self.r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
                 tick['tradable'] = ''
-                self.r.xadd("data",{'data':json.dumps(tick,default=str)})
-                #self.save.save_tick(tick)
+                stream = self.ConvertToken(tick['instrument_token']).split(':')[1] # only token not NSE OR BSE will be accounted for. 
+                self.r.xadd(stream,{'data':json.dumps(tick,default=str)})
 
     def on_connect(self,ws, response):
         print("🔗 Connected. Subscribing to tokens...")
@@ -170,25 +168,6 @@ if is_connected():
 else:
     print("❌ No internet connection.")
 
-def send_email_alert(subject, body):
-    email_address = os.getenv("EMAIL_ADDRESS")
-    email_password = os.getenv("EMAIL_PASSWORD")
-    to_email = os.getenv("TO_EMAIL")
-
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = email_address
-    msg['To'] = to_email
-    msg.set_content(body)
-
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, context=context) as smtp:
-            smtp.login(email_address, email_password)
-            smtp.send_message(msg)
-        print("✅ Email sent successfully.")
-    except Exception as e:
-        print(f"❌ Failed to send email: {e}")
 
 def heartbeat_monitor():
     logger = setup_logger()
@@ -221,7 +200,7 @@ def heartbeat_monitor():
 
             if diff>SEND_MAIL_TIMEOUT:
                 if is_connected():
-                    send_email_alert(
+                    Report.send_email_alert(
                         subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")} KITE WEBSOCKET MALFUNCTION",
                         body="Dear Guru Sai," \
                         "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
@@ -246,7 +225,7 @@ def heartbeat_monitor():
             except Exception as e:
                 if diff==SEND_MAIL_TIMEOUT/2:
                     if is_connected():
-                        send_email_alert(
+                        Report.send_email_alert(
                             subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")}",
                             body=f"Dear Guru Sai," \
                             "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
@@ -260,11 +239,5 @@ def heartbeat_monitor():
                 logger.error(f"RECONNECT ISSUES: {e}",exc_info=True)
                 print(f"⚠️ Reconnect failed: {e}")
 
+
         
-def report(body):
-    send_email_alert(
-        subject= f" DATA REVIEW: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")}",
-        body= body
-    )
-            
-            
