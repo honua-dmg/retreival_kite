@@ -14,7 +14,8 @@ class Consumer():
         self.kite = KiteConnect(api_key=self.api_key) 
         self.nse = self.tokenStockMapping("NSE")
         self.bse = self.tokenStockMapping("BSE")
-        
+        self.streams = {x:"0" for x in os.getenv("STOCKS").split(",")}
+        self.consumers = {}
     
     def tokenStockMapping(self,exchange):
         df = pd.DataFrame(self.kite.instruments(exchange))
@@ -27,16 +28,17 @@ class Consumer():
             return f"BSE:{self.bse[token]}"
         
 
-    def CSVConsumer(self,startIndex,EndIndex):
+    def CSVConsumer(self,id):
         """
         which directory will 
         """
         r = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)
-        worker = Save.CSV(self.directory,os.getenv("STOCKS").split(",")[startIndex:EndIndex],self.kite )
+        worker = Save.CSV(self.directory,self.kite )
         
-        streams = {x:"0" for x in os.getenv("STOCKS").split(",")[startIndex:EndIndex]}
+        
         
         while r.get('end')!='true' : # continuosly reading the incoming stream of data.
+            streams = {x:"0" for x in self.consumers[id]}
             messages = r.xread(streams,block=100)
             if messages == []:
                 continue
@@ -58,12 +60,13 @@ class Consumer():
 
     def saveData(self,N):
         dotenv.load_dotenv()
-        Save.CSV(self.directory,os.getenv("STOCKS").split(","),KiteConnect(api_key= os.getenv('APIKEY')) ).initialise()
+        Save.CSV(self.directory,KiteConnect(api_key= os.getenv('APIKEY')) ).initialise()
         No_stocks = len(os.getenv("STOCKS").split(","))
         stocksPerConsumer = No_stocks//N
         threads = []
         for i in range(0,No_stocks,stocksPerConsumer):
-            thread = threading.Thread(target=self.CSVConsumer,args=(i,i+stocksPerConsumer),name=f'CSVCONSUMER_{i/stocksPerConsumer}')
+            self.consumers[i] = self.streams.keys()[i:i+stocksPerConsumer]
+            thread = threading.Thread(target=self.CSVConsumer,args=(i),name=f'CSVCONSUMER_{i/stocksPerConsumer}')
             threads.append(thread)
 
         for thread in threads:
