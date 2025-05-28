@@ -38,7 +38,7 @@ def report(body):
 
 def count_lines_safe(filepath):
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-        return sum(1 for _ in f)
+        return sum(1 for _ in f)-1
 
 def count(path,date):
     files = {}

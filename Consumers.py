@@ -32,7 +32,7 @@ class Consumer():
         which directory will 
         """
         r = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)
-        worker = Save.CSV(self.directory,os.getenv("STOCKS").split(",")[startIndex:EndIndex],self.kit )
+        worker = Save.CSV(self.directory,os.getenv("STOCKS").split(",")[startIndex:EndIndex],self.kite )
         
         streams = {x:"0" for x in os.getenv("STOCKS").split(",")[startIndex:EndIndex]}
         
