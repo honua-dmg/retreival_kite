@@ -3,16 +3,17 @@ import dotenv
 import os
 import csv
 import pandas as pd
-
+import dotenv
 
 class CSV():
-        def __init__(self,directory:str,stonks:list,kite) -> None:
+        def __init__(self,directory:str,kite) -> None:
         
             self.dir = directory # to know where we have to save our shit
             self.initialised = False
             self.kite = kite
             dotenv.load_dotenv()
-            self.stonks = stonks # ['LTIM',"SBIN",'BAJFINANCE',...]
+            
+            self.stonks = os.getenv("STOCKS").split(",") # ['LTIM',"SBIN",'BAJFINANCE',...]
             self.nse = self.tokenStockMapping("NSE") # {token: stockname NSE}
             self.bse = self.tokenStockMapping("BSE") # {token :stockname BSE}
 
@@ -46,6 +47,9 @@ class CSV():
             for i in range(1, 6):
                 header += [f'buy_price_{i}', f'buy_qty_{i}', f'buy_orders_{i}']
                 header += [f'sell_price_{i}', f'sell_qty_{i}', f'sell_orders_{i}']
+
+            if os.path.getsize(file_path) != 0: # don't make new cols if cols already exist (file size will be nonzero )
+                return
 
             with open(file_path, mode='a', newline='') as file:
                 writer = csv.writer(file)
