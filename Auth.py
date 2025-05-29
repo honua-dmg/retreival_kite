@@ -16,12 +16,28 @@ def save_auth_code(new_auth_code, env_path=".env"):
 
     # Update with new values
     env_vars["AUTH_CODE"] = new_auth_code
-    env_vars["AUTH_CODE_TIMESTAMP"] = dt.datetime.now().isoformat()
+    #tiem = dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5)
+
+    IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+    now_ist = dt.datetime.now(IST)
+    iso_time = now_ist.isoformat()
+    env_vars["AUTH_CODE_TIMESTAMP"] = iso_time
 
     # Write back to the .env file
     with open(env_path, "w") as f:
         for key, value in env_vars.items():
             f.write(f"{key}={value}\n")
+def timezone_isoformat(tz: dt.timezone) -> str:
+    """Return the timezone offset as an ISO 8601 formatted string like '+05:30'."""
+    offset = tz.utcoffset(None)
+    if offset is None:
+        return ''
+    total_seconds = offset.total_seconds()
+    sign = '+' if total_seconds >= 0 else '-'
+    total_seconds = abs(int(total_seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes = remainder // 60
+    return f"{sign}{hours:02d}:{minutes:02d}"
 
 
 def getAuth():
@@ -57,14 +73,13 @@ def getAuth():
     auth_code = os.getenv("AUTH_CODE")
     timestamp_str = os.getenv("AUTH_CODE_TIMESTAMP")
 
-
     if auth_code and timestamp_str:
         try:
+            IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
             timestamp = dt.datetime.fromisoformat(timestamp_str)
-            now = dt.datetime.now()
 
-            # Get today's 6 AM datetime
-            six_am_today = dt.datetime.combine(now.date(), dt.time(6, 0))
+            now = dt.datetime.now(IST)  # timezone-aware in IST
+            six_am_today = dt.datetime.combine(now.date(), dt.time(6, 0, tzinfo=IST))
 
             if timestamp >= six_am_today:
                 print("✅ Auth code is still valid (obtained after 6 AM).")
@@ -72,9 +87,7 @@ def getAuth():
             else:
                 print("❌ Auth code was obtained before 6 AM. Fetching new code...")
         except Exception as e:
-            print("⚠️ Error parsing timestamp, regenerating auth code...")
-
-
+            print(f"⚠️ Error parsing timestamp, regenerating auth code...{e}")
 
 
     # URL to initiate login
@@ -104,7 +117,7 @@ def getAuth():
     totp = pyotp.TOTP(totp_key).now()
     driver.find_element(By.ID, "userid").send_keys(totp)
     #driver.find_element(By.XPATH, "//button[@type='submit']").click()
-    time.sleep(.5)
+    time.sleep(1)
 
     for i in driver.current_url.split('?')[1].split('&'):
         if i.split('=')[0] == 'request_token':
