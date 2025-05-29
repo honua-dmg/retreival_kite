@@ -4,7 +4,8 @@ import os
 import csv
 import pandas as pd
 import dotenv
-
+from zoneinfo import ZoneInfo
+from tzlocal import get_localzone # to get local timezone
 class CSV():
         def __init__(self,directory:str,kite) -> None:
         
@@ -16,7 +17,8 @@ class CSV():
             self.stonks = os.getenv("STOCKS").split(",") # ['LTIM',"SBIN",'BAJFINANCE',...]
             self.nse = self.tokenStockMapping("NSE") # {token: stockname NSE}
             self.bse = self.tokenStockMapping("BSE") # {token :stockname BSE}
-
+            self.local_tz = get_localzone() 
+            self.ist = ZoneInfo("Asia/Kolkata")
             self.india_date=dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
         
         def tokenStockMapping(self,exchange):
@@ -48,7 +50,7 @@ class CSV():
                 header += [f'buy_price_{i}', f'buy_qty_{i}', f'buy_orders_{i}']
                 header += [f'sell_price_{i}', f'sell_qty_{i}', f'sell_orders_{i}']
 
-            if os.path.getsize(file_path) != 0: # don't make new cols if cols already exist (file size will be nonzero )
+            if os.path.exists(file_path) and os.path.getsize(file_path) != 0: # don't make new cols if cols already exist (file size will be nonzero )
                 return
 
             with open(file_path, mode='a', newline='') as file:
@@ -83,9 +85,13 @@ class CSV():
             exchg,stock = self.ConvertToken(tick['instrument_token']).split(':')
             directory = os.path.join(self.dir,exchg,stock)
             file_path = os.path.join(directory,f'{self.india_date}.csv')
+            dt_naive = dt.datetime.strptime(tick['last_trade_time'], "%Y-%m-%d %H:%M:%S")
+            dt_local = dt_naive.replace(tzinfo=self.local_tz)
+            dt_ist = dt_local.astimezone(self.ist)
+
             # get ticker
             row = [
-            dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%H-%M-%S"),
+            dt_ist.strftime("%H:%M:%S"),
             tick['instrument_token'],
             tick.get('last_price'),
             tick.get('last_traded_quantity'),

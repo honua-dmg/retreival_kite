@@ -29,7 +29,7 @@ class Data():
         self.kite = KiteConnect(api_key=self.api_key) 
         nse = self.stockTokenMapping('NSE')
         bse = self.stockTokenMapping('BSE')
-        self.tokens = [ nse[x] for x in self.stocks]+ [bse[x] for x in self.stocks] #nse stocks
+        self.tokens = [ nse[x] for x in self.stocks if x in nse.keys()]+ [bse[x] for x in self.stocks if x in bse.keys()] #nse stocks
         self.nse = self.tokenStockMapping("NSE")
         self.bse = self.tokenStockMapping("BSE")
         self.r = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)

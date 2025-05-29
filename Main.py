@@ -8,7 +8,7 @@ import Report
 import dotenv
 import os
 
-
+PATH = r'/Users/gurusai/data/kite'
 def sleep_till9(hours,mins,seconds):
     
     return 9*3600+15*60- ( int(hours)*3600 + int(mins)*60+int(seconds) )
@@ -19,21 +19,21 @@ def begin(r):
         print(f"Name: {thread.name}, \n\tAlive: {thread.is_alive()}\tDaemon: {thread.daemon} ")
     r.set('end','false')
     r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
-    saveConsumer = Consumers.Consumer(directory=r'/Users/gurusai/data/kite')
-    consumer_thread = threading.Thread(target=saveConsumer.saveData,args=(10,))
+    #consumer = Consumers.Consumer(directory=PATH,num_consumers=10)
+
+   
+    consumerThreads = Consumers.start_consumer_threads(PATH, num_consumers=10)
     producer_thread = threading.Thread(target=producer.heartbeat_monitor)
+    
     producer_thread.start()
-    consumer_thread.start()
     producer_thread.join()
-    consumer_thread.join()
-        
-    hours, mins = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%H:%M").split(':')
-
-
+    for thread in consumerThreads:
+        thread.join()   
+    
 
 def end(r):
     dotenv.load_dotenv()
-    path = r'/Users/gurusai/data/kite'
+    path = PATH
     date= dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
     nse = Report.count(path=os.path.join(path,'NSE'),date=date)
     bse = Report.count(path=os.path.join(path,'BSE'),date=date)
