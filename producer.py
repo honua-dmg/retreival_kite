@@ -210,6 +210,10 @@ def heartbeat_monitor():
                     )
                 else:
                     logger.error(f"TOO MANY RECONNECT ISSUES at time: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"H:%M:%S")}",exc_info=True)
+                p.terminate() # shutting the connection down
+                print(f"terminating {p}")
+                p.join()
+                r.set('end','true')
                 break
             try:
                 # resetting the terminal link
@@ -234,8 +238,14 @@ def heartbeat_monitor():
                             "Best regards,\n" \
                             "Guru Sai. "
                         )
+
                     else:
                         logger.error(f"internet not connected at time: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"H:%M:%S")}")
+                    p.terminate() # shutting the connection down
+                    print(f"terminating {p}")
+                    p.join()
+                    r.set('end','true')
+                    break
                 logger.error(f"RECONNECT ISSUES: {e}",exc_info=True)
                 print(f"⚠️ Reconnect failed: {e}")
 
