@@ -91,7 +91,7 @@ class CSV():
 
             # get ticker
             row = [
-            dt_ist.strftime("%H:%M:%S"),
+            dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%H:%M:%S"),
             tick['instrument_token'],
             tick.get('last_price'),
             tick.get('last_traded_quantity'),

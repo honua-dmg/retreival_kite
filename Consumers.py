@@ -127,7 +127,7 @@ class Consumer():
                         thread.start()
         threading.Thread(target=monitor, daemon=True).start()
 
-    def start_scheduler(self, interval=10):
+    def start_scheduler(self, interval=3600):
         def loop():
             while self.r.get('end')!='true' :
                 time.sleep(interval)
