@@ -93,7 +93,6 @@ class Consumer():
         
     def jobscheduler(self):
         self.rebalance_flag.clear()
-        print("[Scheduler] Rebalancing consumers...")
 
         bse = Report.count(path=os.path.join(self.directory, 'BSE'), date=self.date)[1:]
 
@@ -109,9 +108,7 @@ class Consumer():
         self.consumers = dict(new_assignments)
         for cid, stocks in self.consumers.items():
             total_count = totals[cid]  # total count assigned to this consumer
-            print(f"Consumer {cid}: Stocks={stocks}, Total count={total_count}")
 
-        print("[Scheduler] Consumer reassignment complete.")
         self.rebalance_flag.set()
 
     def start_thread_monitor(self, check_interval=10):
@@ -122,7 +119,8 @@ class Consumer():
                 for cid in self.consumers:
                     tname = f"CSVCONSUMER_{cid}"
                     if tname not in active:
-                        print(f"[Monitor] {tname} is down. Restarting...")
+                        print(f"[Monitor] {tname}, responsible for :\n\t{self.consumers[cid]}\n is down. Restarting...")
+
                         thread = threading.Thread(target=self.CSVConsumer, args=(cid,), name=tname)
                         thread.start()
         threading.Thread(target=monitor, daemon=True).start()
@@ -224,7 +222,7 @@ def test_jobscheduler_with_init():
         print("\n[TEST] Rebalanced Assignments:")
         for cid, stocks in consumer.consumers.items():
             total_ticks = sum(dict(mock_bse_data).get(stock, 0) for stock in stocks)
-            print(f"Consumer {cid}: {stocks} | Total Tick Load: {total_ticks}")
+            #print(f"Consumer {cid}: {stocks} | Total Tick Load: {total_ticks}")
 
         # Assertions (basic checks)
         assert len(consumer.consumers) == 3, "Should have 3 consumer groups"

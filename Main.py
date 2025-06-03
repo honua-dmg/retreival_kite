@@ -95,16 +95,17 @@ def end(r):
         )
     
     Report.report(body)
+    hours, mins,seconds = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%H:%M:%S").split(':')
     if int(hours)>=15 and int(mins)>=30:
         r.set('end','true')
         r.flushall() 
 
-if __name__=="__main__":
-    r = redis.Redis(host="localhost",port="6379",db=0)
-    hours, mins,seconds = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%H:%M:%S").split(':')
-    if int(hours)<9  or (int(hours)==9 and int(mins)<15):
-        if len(r.keys())>0:
-            r.flushall() # to ensure no extra data remains in cache. 
+if __name__ == "__main__":
+    r = redis.Redis(host="localhost", port="6379", db=0)
+    hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
+    if int(hours) < 9 or (int(hours) == 9 and int(mins) < 15):
+        if len(r.keys()) > 0:
+            r.flushall()  # to ensure no extra data remains in cache. 
             print('flushed redis db (not done earlier)')
         print(f'present time is: {hours}: {mins}: {seconds}, we need to sleep for a bit.')
         sleep_time = sleep_till9(hours,mins,seconds)
