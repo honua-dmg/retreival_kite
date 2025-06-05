@@ -32,7 +32,7 @@ class Data():
         self.tokens = [ nse[x] for x in self.stocks if x in nse.keys()]+ [bse[x] for x in self.stocks if x in bse.keys()] #nse stocks
         self.nse = self.tokenStockMapping("NSE")
         self.bse = self.tokenStockMapping("BSE")
-        self.r = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)
+        self.r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
         self.access_token = Auth.getAuth()
         # our websocket will be running here
         self.runningThread = None
@@ -111,7 +111,7 @@ class Data():
 
 
 def Producer_worker():
-    r = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)
+    r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
     main = Data()
     r.set('end','false')
     try:
@@ -172,7 +172,7 @@ else:
 def heartbeat_monitor():
     logger = setup_logger()
     p = InitialiseProducer()
-    r = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)
+    r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
     try:
         last_tick_time = float(r.get('time'))
     except TypeError:

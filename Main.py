@@ -9,8 +9,8 @@ import dotenv
 import os
 import requests
 from bs4 import BeautifulSoup
-
-PATH = r'/Users/gurusai/data/kite'
+dotenv.load_dotenv()
+PATH = os.getenv("FILEPATH")
 def sleep_till9(hours,mins,seconds):
     
     return 9*3600+15*60- ( int(hours)*3600 + int(mins)*60+int(seconds) )
@@ -101,7 +101,7 @@ def end(r):
         r.flushall() 
 
 if __name__ == "__main__":
-    r = redis.Redis(host="localhost", port="6379", db=0)
+    r = redis.Redis(host="redis", port="6379", db=0)
     hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
     if int(hours) < 9 or (int(hours) == 9 and int(mins) < 15):
         if len(r.keys()) > 0:

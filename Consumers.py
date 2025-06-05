@@ -25,7 +25,7 @@ class Consumer():
         self.date = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
         self.rebalance_flag = threading.Event()  # shared across threads
         self.rebalance_flag.set()
-        self.r  = redis.Redis(host="localhost",port="6379",db=0,decode_responses=True)
+        self.r  = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
         if not self.r.exists('stocks'):
             # Initialize stocks in Redis if not already present
             print("[INFO] Initializing stocks in Redis...")

@@ -93,7 +93,7 @@ def build_email_body(redis_count, nse_data, bse_data, extra_sections=None):
     return "\n".join(body)
 
 dotenv.load_dotenv()
-r = redis.Redis(host="localhost",port="6379",db=0)
+r = redis.Redis(host="redis",port="6379",db=0)
 path = r'/Users/gurusai/data/kite'
 date= dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
 nse = count(path=os.path.join(path,'NSE'),date=date)
