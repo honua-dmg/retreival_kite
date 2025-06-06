@@ -6,7 +6,7 @@ services:
       dockerfile: docker/Dockerfile
     volumes:
       - ../user-env/.env:/app/.env
-      - ../data:/app/data
+      - ${FILEPATH}:/app/data
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379

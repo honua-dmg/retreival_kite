@@ -108,7 +108,7 @@ class Data():
             ws (KiteTicker): The KiteTicker object.
             response (dict): The response from the server.
         """
-        print("🔗 Connected. Subscribing to tokens...")
+        print("🔗 Connected. Subscribing to tokens...",flush=True)
         ws.subscribe(self.tokens)
         ws.set_mode(ws.MODE_FULL, self.tokens)  # You can use MODE_QUOTE or MODE_LTP too
 
@@ -121,16 +121,16 @@ class Data():
             code (int): The close code.
             reason (str): The reason for the close.
         """
-        print("❌ Connection closed:", code, reason)
+        print("❌ Connection closed:", code, reason,flush=True)
 
     def on_error(self,ws, code, reason):
-        print("⚠️ Error:", code, reason)
+        print("⚠️ Error:", code, reason,flush=True)
 
     def on_noreconnect(self,ws):
-        print("❗ No reconnect will be attempted.")
+        print("❗ No reconnect will be attempted.",flush=True)
 
     def on_reconnect(self,ws, attempts_count):
-        print(f"🔄 Reconnect attempt #{attempts_count}")
+        print(f"🔄 Reconnect attempt #{attempts_count}",flush=True)
 
     #test this.
     def subscribe(self):

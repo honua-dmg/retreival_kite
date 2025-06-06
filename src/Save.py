@@ -93,6 +93,9 @@ class CSV():
             This method checks if the directories for each stock exist and creates them if necessary.
             It also initialises the CSV files for each stock with the required columns.
             """
+             # Create exchange directories if they don't exist
+            os.makedirs(os.path.join(self.dir, "NSE"), exist_ok=True)
+            os.makedirs(os.path.join(self.dir, "BSE"), exist_ok=True)
             for stonk in self.stonks:
                 #check if directories exist
             
@@ -157,3 +160,4 @@ class CSV():
             with open(file_path, mode='a', newline='') as file:
                 writer = csv.writer(file)
                 writer.writerow(row)
+            print(f"Saved tick for {tick['instrument_token']} at file {file_path}",flush=True)

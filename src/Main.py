@@ -10,7 +10,7 @@ import os
 import requests
 from bs4 import BeautifulSoup
 
-ENVLOC = 'app/.env'
+ENVLOC = '/app/.env'
 dotenv.load_dotenv(ENVLOC)
 
 PATH = os.getenv("FILEPATH")
@@ -68,6 +68,7 @@ def begin(r):
     Args:
         r (redis.Redis): The Redis connection object.
     """
+    print("Market open: ",is_market_open())
     if not is_market_open():
         print("Market is closed today. Exiting...")
         r.set('end','true')
@@ -121,20 +122,16 @@ if __name__ == "__main__":
     
     This function is the main entry point of the program. It checks if the market is open and starts the main program.
     """
+    dotenv.load_dotenv(ENVLOC)
     r  = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
     print("Starting main program", flush=True)
     print(f"PATH: {PATH}", flush=True)
-    print(f"Redis connection: {r}", flush=True)
-    
-    print("Loading environment variables", flush=True)
-    dotenv.load_dotenv(ENVLOC)
-    print("Environment variables loaded", flush=True)
-    
-    print("Checking time", flush=True)
+
+
+ 
     hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
     print(f"Current time: {hours}:{mins}:{seconds}", flush=True)
     
-    print("Checking market status", flush=True)
     if int(hours) < 9 or (int(hours) == 9 and int(mins) < 15):
         print("Time is before market hours", flush=True)
         if len(r.keys()) > 0:

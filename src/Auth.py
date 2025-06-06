@@ -51,7 +51,7 @@ def timezone_isoformat(tz: dt.timezone) -> str:
     minutes = remainder // 60
     return f"{sign}{hours:02d}:{minutes:02d}"
 
-async def getAuth():
+async def async_getAuth():
     """
     Authenticates the user with the Kite API using API key, secret, and TOTP-based 2FA.
     This function performs the following steps:
@@ -71,8 +71,8 @@ async def getAuth():
         - Uncomment the `--headless` option in Chrome options for headless execution.
 
     """
-    dotenv.load_dotenv(ENVLOC   )
-
+    dotenv.load_dotenv(ENVLOC)
+    print('getting auth code',flush=True)
     api_key = os.getenv('APIKEY')
     api_secret = os.getenv("APISECRET")
     user_id = os.getenv('USERID')
@@ -93,12 +93,12 @@ async def getAuth():
             six_am_today = dt.datetime.combine(now.date(), dt.time(6, 0, tzinfo=IST))
 
             if timestamp >= six_am_today:
-                print("✅ Auth code is still valid (obtained after 6 AM).")
+                print("✅ Auth code is still valid (obtained after 6 AM).",flush=True)
                 return auth_code
             else:
-                print("❌ Auth code was obtained before 6 AM. Fetching new code...")
+                print("❌ Auth code was obtained before 6 AM. Fetching new code...",flush=True)
         except Exception as e:
-            print(f"⚠️ Error parsing timestamp, regenerating auth code...{e}")
+            print(f"⚠️ Error parsing timestamp, regenerating auth code...{e}",flush=True)
 
 
     # URL to initiate login
@@ -125,18 +125,20 @@ async def getAuth():
 
             url = page.url
             await browser.close()
-            print(f"🔗 Redirected URL: {url}")
+            print(f"🔗 Redirected URL: {url}",flush=True)
             if "request_token=" not in url:
-                raise Exception("❌ Failed to retrieve request_token from redirected URL")
+                raise Exception("❌ Failed to retrieve request_token from redirected URL",flush=True)
 
             request_token = next(i.split('=')[1] for i in url.split('?')[1].split('&') if i.startswith('request_token='))
 
             kite = KiteConnect(api_key=api_key)
             data = kite.generate_session(request_token, api_secret=api_secret)
             access_token = data["access_token"]
-            print(f"✅ Auth code: {access_token}")
+            print(f"✅ Auth code: {access_token}",flush=True)
             save_auth_code(access_token)
             return access_token
 
+def getAuth():
+    return asyncio.run(async_getAuth())
 if __name__ == '__main__':
-    asyncio.run(getAuth())
+    asyncio.run(async_getAuth())
