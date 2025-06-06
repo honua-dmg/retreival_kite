@@ -108,11 +108,8 @@ def getAuth():
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--window-size=1920,1080')
     # Check if we're running in Docker
-    if os.path.exists('/.dockerenv'):
-        service = Service('/usr/bin/chromedriver')
-    else:
-        service = None
-    driver = webdriver.Chrome(options=options,service=service)
+
+    driver = webdriver.Chrome(options=options)
 
 
     driver.get(login_url)
