@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 ENVLOC = '/app/.env'
 dotenv.load_dotenv(ENVLOC)
 
-PATH = os.getenv("FILEPATH")
+PATH = '/app/data'
 def sleep_till9(hours,mins,seconds):
     
     return 9*3600+15*60- ( int(hours)*3600 + int(mins)*60+int(seconds) )
