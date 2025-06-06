@@ -6,6 +6,8 @@ import pandas as pd
 import dotenv
 from zoneinfo import ZoneInfo
 from tzlocal import get_localzone # to get local timezone
+
+ENVLOC = 'app/.env'
 class CSV():
         def __init__(self,directory:str,kite) -> None:
             """
@@ -18,7 +20,7 @@ class CSV():
             self.dir = directory # to know where we have to save our shit
             self.initialised = False
             self.kite = kite
-            dotenv.load_dotenv('/app/.env')
+            dotenv.load_dotenv(ENVLOC)
             
             self.stonks = os.getenv("STOCKS").split(",") # ['LTIM',"SBIN",'BAJFINANCE',...]
             self.nse = self.tokenStockMapping("NSE") # {token: stockname NSE}

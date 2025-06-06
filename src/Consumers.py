@@ -11,6 +11,8 @@ import datetime as dt
 import time
 from collections import defaultdict
 import math
+
+ENVLOC = 'app/.env'
 class Consumer():
     def __init__(self,directory,num_consumers):
         """
@@ -20,7 +22,7 @@ class Consumer():
             directory (str): The directory where the CSV files are stored.
             num_consumers (int): The number of consumers to be used.
         """
-        dotenv.load_dotenv('/app/.env')
+        dotenv.load_dotenv( ENVLOC)
         self.directory = directory
         self.num_consumers = num_consumers
         self.api_key = os.getenv('APIKEY')
@@ -108,7 +110,7 @@ class Consumer():
         initialises the CSV files and starts the CSVConsumer threads.
         assigns each thread with an even number of stocks at random.
         """
-        dotenv.load_dotenv('/app/.env')
+        dotenv.load_dotenv(ENVLOC)
         Save.CSV(self.directory,self.kite).initialise()
         No_stocks = len(os.getenv("STOCKS").split(","))
         stocksPerConsumer = math.ceil(No_stocks/self.num_consumers)

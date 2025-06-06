@@ -8,7 +8,10 @@ import time
 import pyotp
 from kiteconnect import KiteConnect
 import datetime as dt
+from playwright.async_api import async_playwright   
+import asyncio 
 
+ENVLOC = 'app/.env'
 def save_auth_code(new_auth_code):
     """
     Saves the authentication code to the .env file.
@@ -17,8 +20,8 @@ def save_auth_code(new_auth_code):
         new_auth_code (str): The authentication code to save.
     """
     # Load existing environment variables from the .env file
-    dotenv.load_dotenv('/app/.env')
-    env_vars = dotenv.dotenv_values('/app/.env')
+    dotenv.load_dotenv(ENVLOC)
+    env_vars = dotenv.dotenv_values(ENVLOC)
 
     # Update with new values
     env_vars["AUTH_CODE"] = new_auth_code
@@ -30,7 +33,7 @@ def save_auth_code(new_auth_code):
     env_vars["AUTH_CODE_TIMESTAMP"] = iso_time
 
     # Write back to the .env file
-    with open('/app/.env', "w") as f:
+    with open(ENVLOC, "w") as f:
         for key, value in env_vars.items():
             f.write(f"{key}={value}\n")
 
@@ -48,7 +51,7 @@ def timezone_isoformat(tz: dt.timezone) -> str:
     minutes = remainder // 60
     return f"{sign}{hours:02d}:{minutes:02d}"
 
-def getAuth():
+async def getAuth():
     """
     Authenticates the user with the Kite API using API key, secret, and TOTP-based 2FA.
     This function performs the following steps:
@@ -68,7 +71,7 @@ def getAuth():
         - Uncomment the `--headless` option in Chrome options for headless execution.
 
     """
-    dotenv.load_dotenv('/app/.env')
+    dotenv.load_dotenv(ENVLOC   )
 
     api_key = os.getenv('APIKEY')
     api_secret = os.getenv("APISECRET")
@@ -102,42 +105,38 @@ def getAuth():
     login_url = f'https://kite.zerodha.com/connect/login?v=3&api_key={api_key}'
 
     # Setup Chrome
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless=new')  # Use headless mode
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--window-size=1920,1080')
-    # Check if we're running in Docker
+    async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page = await context.new_page()
+            await page.goto(login_url)
+            print("🔗 Navigated to login page")
+            await page.fill('#userid', user_id)
+            await page.fill('#password', password)
+            await page.click('button[type="submit"]')
 
-    driver = webdriver.Chrome(options=options)
+            await page.wait_for_timeout(2000)
+            print("🔗 Submitted login form")
+            totp = pyotp.TOTP(totp_key).now()
+            await page.fill('#userid', totp)
+            #await page.click('button[type="submit"]')  # Only needed if 2FA step requires submit
+            print("🔗 Filled TOTP field")
+            await page.wait_for_timeout(3000)
 
+            url = page.url
+            await browser.close()
+            print(f"🔗 Redirected URL: {url}")
+            if "request_token=" not in url:
+                raise Exception("❌ Failed to retrieve request_token from redirected URL")
 
-    driver.get(login_url)
-    time.sleep(2)
+            request_token = next(i.split('=')[1] for i in url.split('?')[1].split('&') if i.startswith('request_token='))
 
-    # Step 1: Username and password
-    driver.find_element(By.ID, "userid").send_keys(user_id)
-    driver.find_element(By.ID, "password").send_keys(password)
-    driver.find_element(By.XPATH, "//button[@type='submit']").click()
-
-    time.sleep(2)
-
-    # Step 2: TOTP-based 2FA
-    totp = pyotp.TOTP(totp_key).now()
-    driver.find_element(By.ID, "userid").send_keys(totp)
-    #driver.find_element(By.XPATH, "//button[@type='submit']").click()
-    time.sleep(1)
-
-    for i in driver.current_url.split('?')[1].split('&'):
-        if i.split('=')[0] == 'request_token':
-            request_token = i.split('=')[1]
-    driver.close()
-
-    kite = KiteConnect(api_key=api_key) # might be an issue, look into it. 
-    data = kite.generate_session(request_token, api_secret=api_secret)
-    access_token = data["access_token"]
-    save_auth_code(access_token)
-    return access_token
+            kite = KiteConnect(api_key=api_key)
+            data = kite.generate_session(request_token, api_secret=api_secret)
+            access_token = data["access_token"]
+            print(f"✅ Auth code: {access_token}")
+            save_auth_code(access_token)
+            return access_token
 
 if __name__ == '__main__':
-    getAuth()
+    asyncio.run(getAuth())

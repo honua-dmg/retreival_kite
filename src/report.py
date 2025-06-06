@@ -8,6 +8,7 @@ import os
 from email.message import EmailMessage
 
 
+ENVLOC = 'app/.env'
 def send_email_alert(subject, body):
     """
     Sends an email alert with the given subject and body.
@@ -141,7 +142,7 @@ def build_email_body(redis_count, nse_data, bse_data, extra_sections=None):
 
 
 if __name__ == "__main__":
-    dotenv.load_dotenv('/app/.env')
+    dotenv.load_dotenv(ENVLOC)
     r = redis.Redis(host="redis",port="6379",db=0)
     path = os.getenv("FILEPATH")
     date= dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")

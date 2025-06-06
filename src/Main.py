@@ -9,7 +9,10 @@ import dotenv
 import os
 import requests
 from bs4 import BeautifulSoup
-dotenv.load_dotenv('/app/.env')
+
+ENVLOC = 'app/.env'
+dotenv.load_dotenv(ENVLOC)
+
 PATH = os.getenv("FILEPATH")
 def sleep_till9(hours,mins,seconds):
     
@@ -92,7 +95,7 @@ def end(r):
     Args:
         r (redis.Redis): The Redis connection object.
     """
-    dotenv.load_dotenv('/app/.env')
+    dotenv.load_dotenv(ENVLOC)
     path = PATH
     date= dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
     nse = Report.count(path=os.path.join(path,'NSE'),date=date)
@@ -124,7 +127,7 @@ if __name__ == "__main__":
     print(f"Redis connection: {r}", flush=True)
     
     print("Loading environment variables", flush=True)
-    dotenv.load_dotenv('/app/.env')
+    dotenv.load_dotenv(ENVLOC)
     print("Environment variables loaded", flush=True)
     
     print("Checking time", flush=True)
