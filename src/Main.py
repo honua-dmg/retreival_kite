@@ -59,6 +59,12 @@ def is_market_open():
     return today not in holidays or today.weekday() < 5  # Market is closed on weekends (Saturday=5, Sunday=6)
 
 def begin(r):
+    """
+    Starts the main program.
+    
+    Args:
+        r (redis.Redis): The Redis connection object.
+    """
     if not is_market_open():
         print("Market is closed today. Exiting...")
         r.set('end','true')
@@ -80,6 +86,12 @@ def begin(r):
     
 
 def end(r):
+    """
+    Ends the main program.
+    
+    Args:
+        r (redis.Redis): The Redis connection object.
+    """
     dotenv.load_dotenv()
     path = PATH
     date= dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
@@ -101,6 +113,11 @@ def end(r):
         r.flushall() 
 
 if __name__ == "__main__":
+    """
+    Main entry point of the program.
+    
+    This function is the main entry point of the program. It checks if the market is open and starts the main program.
+    """
     r = redis.Redis(host="redis", port="6379", db=0)
     hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
     if int(hours) < 9 or (int(hours) == 9 and int(mins) < 15):

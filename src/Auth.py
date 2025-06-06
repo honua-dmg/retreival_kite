@@ -10,6 +10,13 @@ from kiteconnect import KiteConnect
 import datetime as dt
 
 def save_auth_code(new_auth_code, env_path=".env"):
+    """
+    Saves the authentication code to the .env file.
+    
+    Args:
+        new_auth_code (str): The authentication code to save.
+        env_path (str): The path to the .env file. Defaults to ".env".
+    """
     # Load existing environment variables from the .env file
     dotenv.load_dotenv(dotenv_path=env_path)
     env_vars = dotenv.dotenv_values(env_path)
@@ -27,8 +34,11 @@ def save_auth_code(new_auth_code, env_path=".env"):
     with open(env_path, "w") as f:
         for key, value in env_vars.items():
             f.write(f"{key}={value}\n")
+
 def timezone_isoformat(tz: dt.timezone) -> str:
-    """Return the timezone offset as an ISO 8601 formatted string like '+05:30'."""
+    """
+    Return the timezone offset as an ISO 8601 formatted string like '+05:30'.
+    """
     offset = tz.utcoffset(None)
     if offset is None:
         return ''
@@ -38,7 +48,6 @@ def timezone_isoformat(tz: dt.timezone) -> str:
     hours, remainder = divmod(total_seconds, 3600)
     minutes = remainder // 60
     return f"{sign}{hours:02d}:{minutes:02d}"
-
 
 def getAuth():
     """
@@ -95,7 +104,7 @@ def getAuth():
 
     # Setup Chrome
     chrome_options = Options()
-    #chrome_options.add_argument('--headless')  # Comment this out to see browser
+    chrome_options.add_argument('--headless')  # Comment this out to see browser
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
 
@@ -129,7 +138,6 @@ def getAuth():
     access_token = data["access_token"]
     save_auth_code(access_token)
     return access_token
-
 
 if __name__ == '__main__':
     getAuth()

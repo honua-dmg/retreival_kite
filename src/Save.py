@@ -8,7 +8,13 @@ from zoneinfo import ZoneInfo
 from tzlocal import get_localzone # to get local timezone
 class CSV():
         def __init__(self,directory:str,kite) -> None:
-        
+            """
+            Initializes a CSV object with the given directory and KiteConnect instance.
+            
+            Args:
+                directory (str): The directory where the CSV files are stored.
+                kite (KiteConnect): The KiteConnect instance.
+            """
             self.dir = directory # to know where we have to save our shit
             self.initialised = False
             self.kite = kite
@@ -22,10 +28,28 @@ class CSV():
             self.india_date=dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
         
         def tokenStockMapping(self,exchange):
+            """
+            Maps instrument tokens to trading symbols for the given exchange.
+            
+            Args:
+                exchange (str): The exchange name (e.g., "NSE", "BSE").
+            
+            Returns:
+                dict: A dictionary mapping instrument tokens to trading symbols.
+            """
             df = pd.DataFrame(self.kite.instruments(exchange))
             return dict(zip( df['instrument_token'],df['tradingsymbol']))
         
         def ConvertToken(self,token):
+            """
+            Converts an instrument token to a trading symbol.
+            
+            Args:
+                token (int): The instrument token.
+            
+            Returns:
+                str: The trading symbol.
+            """
             if token in self.nse.keys():
                 return f"NSE:{self.nse[token]}"
             elif token in self.bse.keys():
@@ -61,6 +85,12 @@ class CSV():
                     writer.writerow(header)
 
         def initialise(self):
+            """
+            Initialises the CSV files for each stock.
+            
+            This method checks if the directories for each stock exist and creates them if necessary.
+            It also initialises the CSV files for each stock with the required columns.
+            """
             for stonk in self.stonks:
                 #check if directories exist
             
@@ -80,8 +110,13 @@ class CSV():
                 self._initcols(file_path_NSE)
                 self._initcols(file_path_BSE)
 
-
         def save_tick(self,tick):
+            """
+            Saves a tick of data to a CSV file.
+            
+            Args:
+                tick (dict): The tick of data to save.
+            """
             exchg,stock = self.ConvertToken(tick['instrument_token']).split(':')
             directory = os.path.join(self.dir,exchg,stock)
             file_path = os.path.join(directory,f'{self.india_date}.csv')

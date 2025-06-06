@@ -1,25 +1,29 @@
 import os
-import dotenv
 from kiteconnect import KiteConnect,KiteTicker
-import Save
 import Auth
 import pandas as pd
 import time
-import threading
 import redis
 import json
 import multiprocessing
 import Auth
 import datetime as dt
 import requests
-
 import Report
 
 
 HEARTBEAT_TIMEOUT = 20
 SEND_MAIL_TIMEOUT = 200
 class Data():
+    """
+    A class to manage real-time market data.
+    """
+
     def __init__(self):
+        """
+        Initializes the Data class with necessary attributes.
+        
+        """
         self.api_key = os.getenv('APIKEY')
         self.api_secret = os.getenv("APISECRET")
         self.user_id = os.getenv('USERID')
@@ -36,16 +40,43 @@ class Data():
         self.access_token = Auth.getAuth()
         # our websocket will be running here
         self.runningThread = None
-    
+
     def stockTokenMapping(self,exchange):
+        """
+        Maps stock symbols to their corresponding tokens.
+        
+        Args:
+            exchange (str): The exchange name ('NSE' or 'BSE').
+        
+        Returns:
+            dict: A dictionary mapping stock symbols to their tokens.
+        """
         df = pd.DataFrame(self.kite.instruments(exchange))
         return dict(zip( df['tradingsymbol'],df['instrument_token']))
 
     def tokenStockMapping(self,exchange):
+        """
+        Maps tokens to their corresponding stock symbols.
+        
+        Args:
+            exchange (str): The exchange name ('NSE' or 'BSE').
+        
+        Returns:
+            dict: A dictionary mapping tokens to their stock symbols.
+        """
         df = pd.DataFrame(self.kite.instruments(exchange))
         return dict(zip( df['instrument_token'],df['tradingsymbol']))
     
     def ConvertToken(self,token):
+        """
+        Converts a token to a stock symbol.
+        
+        Args:
+            token (int): The token to convert.
+        
+        Returns:
+            str: The stock symbol corresponding to the token.
+        """
         if token in self.nse.keys():
             return f"NSE:{self.nse[token]}"
         elif token in self.bse.keys():
@@ -54,7 +85,11 @@ class Data():
     ##### WEBSOCKET FUNCTIONS ######
     def on_ticks(self,ws, ticks):
         """
-        we'll send each stock to a separate stream, consumers will decide which stream to subscribe to. 
+        Handles the ticks event.
+        
+        Args:
+            ws (KiteTicker): The KiteTicker object.
+            ticks (list): The list of ticks.
         """
         for tick in ticks:
             
@@ -66,11 +101,26 @@ class Data():
                 self.r.xadd(stream,{'data':json.dumps(tick,default=str)})
 
     def on_connect(self,ws, response):
+        """
+        Handles the connection event.
+        
+        Args:
+            ws (KiteTicker): The KiteTicker object.
+            response (dict): The response from the server.
+        """
         print("🔗 Connected. Subscribing to tokens...")
         ws.subscribe(self.tokens)
         ws.set_mode(ws.MODE_FULL, self.tokens)  # You can use MODE_QUOTE or MODE_LTP too
 
     def on_close(self,ws, code, reason):
+        """
+        Handles the close event.
+        
+        Args:
+            ws (KiteTicker): The KiteTicker object.
+            code (int): The close code.
+            reason (str): The reason for the close.
+        """
         print("❌ Connection closed:", code, reason)
 
     def on_error(self,ws, code, reason):
@@ -98,6 +148,9 @@ class Data():
     
     # Start WebSocket (blocking call)
     def open(self):
+        """
+        Starts the WebSocket connection.
+        """
         self.r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
         self.kws = KiteTicker(self.api_key, self.access_token)
         self.kws.on_ticks = self.on_ticks
@@ -111,6 +164,9 @@ class Data():
 
 
 def Producer_worker():
+    """
+    The main function to start the producer.
+    """
     r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
     main = Data()
     r.set('end','false')
@@ -122,31 +178,39 @@ def Producer_worker():
 
 
 def InitialiseProducer():
+    """
+    Initializes the producer process.
+    """
     p = multiprocessing.Process(target=Producer_worker)
     p.start()
     return p
 
-
-
-
-
-
 def is_connected():
+    """
+    Checks if the internet connection is available.
+    """
     try:
         requests.get("https://www.google.com", timeout=5)
         return True
     except requests.RequestException:
         return False
 
-# Example usage
-if is_connected():
-    print("✅ Internet is available.")
-else:
-    print("❌ No internet connection.")
-
 
 def heartbeat_monitor():
+    """
+
+    Monitors the producer heartbeat and restarts the connection if it fails.
     
+    This function starts a producer process and then continuously checks the time
+    of the last tick stored in Redis. 
+    If the time difference between the current
+    time and the last tick time is greater than the HEARTBEAT_TIMEOUT, it assumes
+    that the connection has failed and restarts the connection by terminating the
+    current process and starting a new one. This process is repeated indefinitely.
+    
+    This function also sends an email to the user if the connection fails.
+
+    """
     p = InitialiseProducer()
     r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
     try:

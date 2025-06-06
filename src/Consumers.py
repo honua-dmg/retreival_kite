@@ -13,6 +13,13 @@ from collections import defaultdict
 import math
 class Consumer():
     def __init__(self,directory,num_consumers):
+        """
+        Initializes a Consumer object with the given directory and number of consumers.
+        
+        Args:
+            directory (str): The directory where the CSV files are stored.
+            num_consumers (int): The number of consumers to be used.
+        """
         dotenv.load_dotenv()
         self.directory = directory
         self.num_consumers = num_consumers
@@ -30,22 +37,43 @@ class Consumer():
             # Initialize stocks in Redis if not already present
             print("[INFO] Initializing stocks in Redis...")
             self.r.hset('stocks', mapping={x:"0" for x in os.getenv("STOCKS").split(",")})
+    
     def tokenStockMapping(self,exchange):
+        """
+        Maps tokens to their corresponding stock symbols.
+        
+        Args:
+            exchange (str): The exchange name ('NSE' or 'BSE').
+        
+        Returns:
+            dict: A dictionary mapping tokens to their stock symbols.
+        """
         df = pd.DataFrame(self.kite.instruments(exchange))
         return dict(zip( df['instrument_token'],df['tradingsymbol']))
     
     def ConvertToken(self,token):
+        """
+        Converts a token to its corresponding stock name.
+        
+        Args:
+            token (int): The token to convert.
+        
+        Returns:
+            str: The stock name corresponding to the token.
+        """
         if token in self.nse.keys():
             return f"NSE:{self.nse[token]}"
         elif token in self.bse.keys():
             return f"BSE:{self.bse[token]}"
         
-
     def CSVConsumer(self,id):
         """
-        which directory will 
-        """
+        Consumes data from Redis and saves it to CSV files.
         
+        Args:
+            id (int): The ID of the consumer.
+        """
+
         worker = Save.CSV(self.directory,self.kite )
         
         
@@ -73,8 +101,13 @@ class Consumer():
                         continue
         print('ending csvWorker')
 
-
     def saveData(self):
+        """
+        Saves data to CSV files.
+        
+        initialises the CSV files and starts the CSVConsumer threads.
+        assigns each thread with an even number of stocks at random.
+        """
         dotenv.load_dotenv()
         Save.CSV(self.directory,self.kite).initialise()
         No_stocks = len(os.getenv("STOCKS").split(","))
@@ -92,6 +125,14 @@ class Consumer():
             thread.join()
         
     def jobscheduler(self):
+        """
+        Rebalances the stocks between the CSVConsumer threads.
+        
+        This function is called every hour to rebalance the stocks between the CSVConsumer threads.
+        It counts the number of lines in the CSV files for the current date and assigns the stocks to the threads
+        in a way that minimizes the total number of lines in each thread.
+        """
+
         self.rebalance_flag.clear()
 
         bse = Report.count(path=os.path.join(self.directory, 'BSE'), date=self.date)[1:]
@@ -112,6 +153,12 @@ class Consumer():
         self.rebalance_flag.set()
 
     def start_thread_monitor(self, check_interval=10):
+        """
+        Starts a thread that monitors the CSVConsumer threads.
+        
+        This function is called when the Consumer object is initialized.
+        It starts a thread that monitors the CSVConsumer threads and restarts them if they are down.
+        """
         def monitor():
             while self.r.get('end')!='true':
                 time.sleep(check_interval)
@@ -126,19 +173,27 @@ class Consumer():
         threading.Thread(target=monitor, daemon=True).start()
 
     def start_scheduler(self, interval=3600):
+        """
+        Starts a thread that runs the jobscheduler function every hour.
+        
+        This function is called when the Consumer object is initialized.
+        It starts a thread that runs the jobscheduler function every hour.
+        """
         def loop():
             while self.r.get('end')!='true' :
                 time.sleep(interval)
                 self.jobscheduler()
         threading.Thread(target=loop, daemon=True).start()
+
 def start_consumer_threads(directory,num_consumers):
-        self = Consumer(directory, num_consumers)
         """
         Starts the following methods in separate threads within the same process:
         - start_thread_monitor: launches internal monitoring thread(s)
         - start_scheduler: launches internal scheduling thread(s)
         - saveData: launches worker threads for data saving
         """
+        self = Consumer(directory, num_consumers)
+        
 
         def run_thread_monitor():
             self.start_thread_monitor()
@@ -162,14 +217,19 @@ def start_consumer_threads(directory,num_consumers):
         #return [t_monitor, t_scheduler, t_save_data]
         return [t_save_data]
 
-import os
-import threading
+
 from unittest.mock import patch
-import datetime as dt
+
 
 # Assuming your Consumer class and imports are defined above or imported
 
 def test_jobscheduler_with_init():
+    """
+    Tests the jobscheduler function with the Consumer object initialized.
+    
+    This function is called when the Consumer object is initialized.
+    It tests the jobscheduler function with the Consumer object initialized.
+    """
     # Mock BSE tick count data (simulate what Report.count returns)
     mock_bse_data = [
         ('RELIANCE', 34000),
