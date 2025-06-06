@@ -7,6 +7,9 @@ downloaded_files/
 #testing
 ./test.ipynb
 ./test2.ipynb
+src/.env
+src/__pycache__/
+src/test.ipynb
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

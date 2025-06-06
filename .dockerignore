@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.venv2/
+env/
+venv/
+ENV/
+
+src/.env
+src/__pycache__/
+src/test.ipynb
+downloaded_files/
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local development files
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Local test files
+*.ipynb
+*.ipynb_checkpoints
+test/
+testing/
+src/test.ipynb
+
+# Local data
+downloaded_files/
+logs/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.pyc
+*.pyo
+
+# Environment files
+.env
+*.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Docker files
+.dockerignore
+.env.example
