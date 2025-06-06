@@ -18,14 +18,14 @@ class CSV():
             self.dir = directory # to know where we have to save our shit
             self.initialised = False
             self.kite = kite
-            dotenv.load_dotenv()
+            dotenv.load_dotenv('/app/.env')
             
             self.stonks = os.getenv("STOCKS").split(",") # ['LTIM',"SBIN",'BAJFINANCE',...]
             self.nse = self.tokenStockMapping("NSE") # {token: stockname NSE}
             self.bse = self.tokenStockMapping("BSE") # {token :stockname BSE}
             self.local_tz = get_localzone() 
             self.ist = ZoneInfo("Asia/Kolkata")
-            self.india_date=dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
+            self.india_date=dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
         
         def tokenStockMapping(self,exchange):
             """
@@ -126,7 +126,7 @@ class CSV():
 
             # get ticker
             row = [
-            dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%H:%M:%S"),
+            dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%H:%M:%S"),
             tick['instrument_token'],
             tick.get('last_price'),
             tick.get('last_traded_quantity'),

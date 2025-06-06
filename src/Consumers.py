@@ -20,7 +20,7 @@ class Consumer():
             directory (str): The directory where the CSV files are stored.
             num_consumers (int): The number of consumers to be used.
         """
-        dotenv.load_dotenv()
+        dotenv.load_dotenv('/app/.env')
         self.directory = directory
         self.num_consumers = num_consumers
         self.api_key = os.getenv('APIKEY')
@@ -29,7 +29,7 @@ class Consumer():
         self.bse = self.tokenStockMapping("BSE")
 
         self.consumers = {}
-        self.date = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
+        self.date = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
         self.rebalance_flag = threading.Event()  # shared across threads
         self.rebalance_flag.set()
         self.r  = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
@@ -108,7 +108,7 @@ class Consumer():
         initialises the CSV files and starts the CSVConsumer threads.
         assigns each thread with an even number of stocks at random.
         """
-        dotenv.load_dotenv()
+        dotenv.load_dotenv('/app/.env')
         Save.CSV(self.directory,self.kite).initialise()
         No_stocks = len(os.getenv("STOCKS").split(","))
         stocksPerConsumer = math.ceil(No_stocks/self.num_consumers)

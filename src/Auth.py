@@ -9,17 +9,16 @@ import pyotp
 from kiteconnect import KiteConnect
 import datetime as dt
 
-def save_auth_code(new_auth_code, env_path=".env"):
+def save_auth_code(new_auth_code):
     """
     Saves the authentication code to the .env file.
     
     Args:
         new_auth_code (str): The authentication code to save.
-        env_path (str): The path to the .env file. Defaults to ".env".
     """
     # Load existing environment variables from the .env file
-    dotenv.load_dotenv(dotenv_path=env_path)
-    env_vars = dotenv.dotenv_values(env_path)
+    dotenv.load_dotenv('/app/.env')
+    env_vars = dotenv.dotenv_values('/app/.env')
 
     # Update with new values
     env_vars["AUTH_CODE"] = new_auth_code
@@ -31,7 +30,7 @@ def save_auth_code(new_auth_code, env_path=".env"):
     env_vars["AUTH_CODE_TIMESTAMP"] = iso_time
 
     # Write back to the .env file
-    with open(env_path, "w") as f:
+    with open('/app/.env', "w") as f:
         for key, value in env_vars.items():
             f.write(f"{key}={value}\n")
 
@@ -69,7 +68,7 @@ def getAuth():
         - Uncomment the `--headless` option in Chrome options for headless execution.
 
     """
-    dotenv.load_dotenv()
+    dotenv.load_dotenv('/app/.env')
 
     api_key = os.getenv('APIKEY')
     api_secret = os.getenv("APISECRET")
@@ -103,15 +102,19 @@ def getAuth():
     login_url = f'https://kite.zerodha.com/connect/login?v=3&api_key={api_key}'
 
     # Setup Chrome
-    chrome_options = Options()
-    chrome_options.add_argument('--headless')  # Comment this out to see browser
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
+    options = webdriver.ChromeOptions()
+    options.add_argument('--headless=new')  # Use headless mode
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--window-size=1920,1080')
+    # Check if we're running in Docker
+    if os.path.exists('/.dockerenv'):
+        service = Service('/usr/bin/chromedriver')
+    else:
+        service = None
+    driver = webdriver.Chrome(options=options,service=service)
 
-    # If chromedriver is in PATH
-    driver = webdriver.Chrome(options=chrome_options)
 
-    
     driver.get(login_url)
     time.sleep(2)
 

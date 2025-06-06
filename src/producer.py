@@ -241,7 +241,7 @@ def heartbeat_monitor():
             if diff>SEND_MAIL_TIMEOUT:
                 if is_connected():
                     Report.send_email_alert(
-                        subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")} KITE WEBSOCKET MALFUNCTION",
+                        subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'%Y:%m:%d%H:%M:%S')} KITE WEBSOCKET MALFUNCTION",
                         body="Dear Guru Sai," \
                         "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
                         "needs your immediate attention.\n" \
@@ -249,7 +249,7 @@ def heartbeat_monitor():
                         "Guru Sai. "
                     )
                 else:
-                    print(f"TOO MANY RECONNECT ISSUES at time: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"H:%M:%S")}")
+                    print(f"TOO MANY RECONNECT ISSUES at time: {dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'H:%M:%S')}")
                 p.terminate() # shutting the connection down
                 print(f"terminating {p}")
                 p.join()
@@ -263,14 +263,14 @@ def heartbeat_monitor():
                 time.sleep(2)  # short wait before reconnect
                 p = InitialiseProducer()
                 
-                print(f'***** TIME:{diff}: time: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"H:%M:%S")}')
+                print(f'***** TIME:{diff}: time: {dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"H:%M:%S")}')
                 
 
             except Exception as e:
                 if diff==SEND_MAIL_TIMEOUT/2:
                     if is_connected():
                         Report.send_email_alert(
-                            subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")}",
+                            subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'%Y:%m:%d%H:%M:%S')}",
                             body=f"Dear Guru Sai," \
                             "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
                             "needs your immediate attention. The following error has been observed\n " \
@@ -280,7 +280,7 @@ def heartbeat_monitor():
                         )
 
                     else:
-                        print(f"internet not connected at time: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"H:%M:%S")}")
+                        print(f"internet not connected at time: {dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'H:%M:%S')}")
                     p.terminate() # shutting the connection down
                     print(f"terminating {p}")
                     p.join()

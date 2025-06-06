@@ -49,7 +49,7 @@ def report(body):
         None
     """
     send_email_alert(
-        subject= f" DATA REVIEW: {dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y:%m:%d%H:%M:%S")}",
+        subject= f" DATA REVIEW: {dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'%Y:%m:%d%H:%M:%S')}",
         body= body
     )
             
@@ -141,10 +141,10 @@ def build_email_body(redis_count, nse_data, bse_data, extra_sections=None):
 
 
 if __name__ == "__main__":
-    dotenv.load_dotenv()
+    dotenv.load_dotenv('/app/.env')
     r = redis.Redis(host="redis",port="6379",db=0)
     path = os.getenv("FILEPATH")
-    date= dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
+    date= dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
     nse = count(path=os.path.join(path,'NSE'),date=date)
     bse = count(path=os.path.join(path,'BSE'),date=date)
     extra = {'actual count':nse[0][1]+bse[0][1]}

@@ -9,7 +9,7 @@ import dotenv
 import os
 import requests
 from bs4 import BeautifulSoup
-dotenv.load_dotenv()
+dotenv.load_dotenv('/app/.env')
 PATH = os.getenv("FILEPATH")
 def sleep_till9(hours,mins,seconds):
     
@@ -92,9 +92,9 @@ def end(r):
     Args:
         r (redis.Redis): The Redis connection object.
     """
-    dotenv.load_dotenv()
+    dotenv.load_dotenv('/app/.env')
     path = PATH
-    date= dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%Y-%m-%d")
+    date= dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
     nse = Report.count(path=os.path.join(path,'NSE'),date=date)
     bse = Report.count(path=os.path.join(path,'BSE'),date=date)
     extra = {'actual count':nse[0][1]+bse[0][1]}
@@ -107,7 +107,7 @@ def end(r):
         )
     
     Report.report(body)
-    hours, mins,seconds = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5),"%H:%M:%S").split(':')
+    hours, mins,seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%H:%M:%S").split(':')
     if int(hours)>=15 and int(mins)>=30:
         r.set('end','true')
         r.flushall() 
@@ -118,19 +118,33 @@ if __name__ == "__main__":
     
     This function is the main entry point of the program. It checks if the market is open and starts the main program.
     """
-    r = redis.Redis(host="redis", port="6379", db=0)
-    hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.UTC) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
+    r  = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
+    print("Starting main program", flush=True)
+    print(f"PATH: {PATH}", flush=True)
+    print(f"Redis connection: {r}", flush=True)
+    
+    print("Loading environment variables", flush=True)
+    dotenv.load_dotenv('/app/.env')
+    print("Environment variables loaded", flush=True)
+    
+    print("Checking time", flush=True)
+    hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
+    print(f"Current time: {hours}:{mins}:{seconds}", flush=True)
+    
+    print("Checking market status", flush=True)
     if int(hours) < 9 or (int(hours) == 9 and int(mins) < 15):
+        print("Time is before market hours", flush=True)
         if len(r.keys()) > 0:
-            r.flushall()  # to ensure no extra data remains in cache. 
-            print('flushed redis db (not done earlier)')
-        print(f'present time is: {hours}: {mins}: {seconds}, we need to sleep for a bit.')
-        sleep_time = sleep_till9(hours,mins,seconds)
-        print(f'sleeping for {sleep_time}')
+            print("Flushing Redis", flush=True)
+            r.flushall()
+        sleep_time = sleep_till9(hours, mins, seconds)
+        print(f"Sleeping for {sleep_time} seconds", flush=True)
         time.sleep(sleep_time)
-
-    print('beigning')
+    
+    print("Starting main program", flush=True)
+    print("Calling begin()", flush=True)
     begin(r)
+    print("Calling end()", flush=True)
     end(r)
 
 
