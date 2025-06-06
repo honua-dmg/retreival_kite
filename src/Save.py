@@ -160,4 +160,4 @@ class CSV():
             with open(file_path, mode='a', newline='') as file:
                 writer = csv.writer(file)
                 writer.writerow(row)
-            print(f"Saved tick for {tick['instrument_token']} at file {file_path}",flush=True)
+            #print(f"Saved tick for {tick['instrument_token']} at file {file_path}",flush=True)

@@ -220,6 +220,14 @@ def heartbeat_monitor():
         r.set('time',last_tick_time)
     
     while True:
+        try:
+            r.get('time')
+        except redis.exceptions.ConnectionError:
+            p.terminate()
+            p.join()
+            r.set('end','true')
+            break   
+
         time.sleep(HEARTBEAT_TIMEOUT)
         last_tick_time = float(r.get('time'))
         now = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()

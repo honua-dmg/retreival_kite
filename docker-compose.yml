@@ -2,10 +2,10 @@
 services:
   app:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     volumes:
-      - ../user-env/.env:/app/.env
+      - .env:/app/.env
       - ${FILEPATH}:/app/data
     environment:
       - REDIS_HOST=redis

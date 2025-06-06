@@ -28,7 +28,7 @@ RUN python -m playwright install chromium
 
 # Copy application code
 COPY src/ .
-COPY user-env/.env .env
+
 
 # Create necessary directories
 RUN mkdir -p /app/data
