@@ -1,22 +1,33 @@
+
 services:
   app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     volumes:
-      - ${FILEPATH}:/app/data
+      - ../user-env/.env:/app/.env
+      - ../data:/app/data
     environment:
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
-      - redis 
+      - redis
+    networks:
+      - app-network
 
   redis:
     image: redis:alpine
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
   redis_data:

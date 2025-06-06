@@ -11,7 +11,7 @@ import datetime as dt
 from playwright.async_api import async_playwright   
 import asyncio 
 
-ENVLOC = 'app/.env'
+ENVLOC = '/app/.env'
 def save_auth_code(new_auth_code):
     """
     Saves the authentication code to the .env file.

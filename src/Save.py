@@ -7,7 +7,7 @@ import dotenv
 from zoneinfo import ZoneInfo
 from tzlocal import get_localzone # to get local timezone
 
-ENVLOC = 'app/.env'
+ENVLOC = '/app/.env'
 class CSV():
         def __init__(self,directory:str,kite) -> None:
             """

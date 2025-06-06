@@ -12,7 +12,7 @@ import time
 from collections import defaultdict
 import math
 
-ENVLOC = 'app/.env'
+ENVLOC = '/app/.env'
 class Consumer():
     def __init__(self,directory,num_consumers):
         """

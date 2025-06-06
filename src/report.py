@@ -8,7 +8,7 @@ import os
 from email.message import EmailMessage
 
 
-ENVLOC = 'app/.env'
+ENVLOC = '/app/.env'
 def send_email_alert(subject, body):
     """
     Sends an email alert with the given subject and body.
