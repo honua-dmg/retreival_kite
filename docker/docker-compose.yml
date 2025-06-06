@@ -1,16 +1,14 @@
-version: '3.8'
 services:
   app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     volumes:
-      - ../user-env:/app/.env
-      - ../data:/app/data
+      - ${FILEPATH}:/app/data
     environment:
       - REDIS_HOST=redis
     depends_on:
-      - redis
+      - redis 
 
   redis:
     image: redis:alpine
