@@ -10,6 +10,9 @@ import os
 import requests
 from bs4 import BeautifulSoup
 
+import logging
+
+
 ENVLOC = '/app/.env'
 dotenv.load_dotenv(ENVLOC)
 
@@ -116,6 +119,64 @@ def end(r):
         r.set('end','true')
         r.flushall() 
 
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('shutdown.log'),
+        logging.StreamHandler()
+    ]
+)
+
+def run_command(command):
+    """Run a shell command and return output"""
+    try:
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        if result.returncode != 0:
+            logging.error(f"Command failed: {command}")
+            logging.error(f"Error: {result.stderr}")
+            return False
+        return result.stdout
+    except Exception as e:
+        logging.error(f"Error running command: {command}")
+        logging.error(str(e))
+        return False
+
+def shutdown_containers():
+    """
+    Shuts down all containers and removes unused resources.
+    """ 
+    # Load environment variables
+    load_dotenv()
+    
+    # Stop all containers
+    logging.info("Stopping all containers...")
+    run_command("docker-compose down")
+    
+    # Remove stopped containers
+    logging.info("Removing stopped containers...")
+    run_command("docker rm -f $(docker ps -aq)")
+    
+    # Remove unused networks
+    logging.info("Removing unused networks...")
+    run_command("docker network prune -f")
+    
+    # Remove unused volumes
+    logging.info("Removing unused volumes...")
+    run_command("docker volume prune -f")
+    
+    # Check if any containers are still running
+    running_containers = run_command("docker ps -q")
+    if not running_containers:
+        logging.info("All containers have been successfully stopped and cleaned up.")
+    else:
+        logging.warning("Warning: Some containers are still running:")
+        run_command("docker ps")
+    
+    logging.info("Shutdown complete!")
+
+
 if __name__ == "__main__":
     """
     Main entry point of the program.
@@ -146,6 +207,9 @@ if __name__ == "__main__":
     begin(r)
     print("Calling end()", flush=True)
     end(r)
+    print("Calling shutdown_containers()", flush=True)
+    shutdown_containers()
+    print("Main program complete", flush=True)
 
 
 
