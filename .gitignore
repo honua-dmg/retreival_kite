@@ -175,4 +175,6 @@ cython_debug/
 deux.ipynb
 test.ipynb
 test.txt
-test.ipynb
+*.pyc
+__pycache__/
+ 

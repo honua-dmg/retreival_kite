@@ -71,7 +71,7 @@ async def async_getAuth():
         - Uncomment the `--headless` option in Chrome options for headless execution.
 
     """
-    dotenv.load_dotenv(ENVLOC)
+    dotenv.load_dotenv(ENVLOC,override=True)
     print('getting auth code',flush=True)
     api_key = os.getenv('APIKEY')
     api_secret = os.getenv("APISECRET")

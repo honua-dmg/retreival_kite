@@ -39,6 +39,44 @@ class Consumer():
             # Initialize stocks in Redis if not already present
             print("[INFO] Initializing stocks in Redis...")
             self.r.hset('stocks', mapping={x:"0" for x in os.getenv("STOCKS").split(",")})
+                    # Add cleanup thread
+        self.cleanup_thread = None
+        self.cleanup_interval = 30  # Run cleanup every 30 seconds
+        self.cleanup_running = False
+        self.cleanup_lag = 100  # Number of messages to lag behind last proces
+    
+    def start_cleanup_thread(self):
+        """Starts a thread that periodically cleans up Redis streams."""
+        if self.cleanup_thread is not None and self.cleanup_thread.is_alive():
+            return
+            
+        def cleanup_loop():
+        
+            while self.r.get('end')!='true':
+                try:
+                    # Get all stocks that have been processed
+                    processed_stocks = self.r.hkeys('stocks')
+                    for stock in processed_stocks:
+                        # Get the last processed ID for this stock
+                        last_id = self.r.hget('stocks', stock)
+                        if last_id and last_id != "0":
+                            
+                            # Get the length of the stream
+                            stream_length = self.r.xlen(stock)
+                            
+                            if stream_length > self.cleanup_lag:
+                                
+                                # Update cleanup ID and trim stream
+                                self.r.xtrim(stock, minid=last_id,approximate=True)
+                    
+                    time.sleep(self.cleanup_interval)
+                except Exception as e:
+                    print(f"[ERROR] Failed to clean up streams: {e}")
+                    time.sleep(1)  # Wait a bit before retrying
+                    
+        self.cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
+        self.cleanup_thread.start()
+
     
     def tokenStockMapping(self,exchange):
         """

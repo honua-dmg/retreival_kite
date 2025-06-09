@@ -33,6 +33,7 @@ class Upload():
         """
         print("Uploading files to S3...")
         date=dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
+        #date= '2025-06-06'
         for root, dirs, files in os.walk(self.local_dir):
             for filename in files:
                 if filename.split('.')[1] != 'csv':

@@ -6,6 +6,7 @@ import smtplib
 import ssl
 import os
 from email.message import EmailMessage
+import resend
 
 
 ENVLOC = '/app/.env'
@@ -20,10 +21,19 @@ def send_email_alert(subject, body):
     Returns:
         None
     """
+    dotenv.load_dotenv(ENVLOC)
+    to_email = os.getenv("TO_EMAIL")
+    resend.api_key = "re_H6N1UiAC_Pjssgzk6DT8yazbkjPDQrmtJ"
+    r = resend.Emails.send({
+    "from": "onboarding@resend.dev",
+    "to": to_email,
+    "subject": subject,
+    "html": body
+    })
+    """    
     email_address = os.getenv("EMAIL_ADDRESS")
     email_password = os.getenv("EMAIL_PASSWORD")
-    to_email = os.getenv("TO_EMAIL")
-
+    
     msg = EmailMessage()
     msg['Subject'] = subject
     msg['From'] = email_address
@@ -37,7 +47,7 @@ def send_email_alert(subject, body):
             smtp.send_message(msg)
         print("✅ Email sent successfully.")
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"❌ Failed to send email: {e}")"""
 
 def report(body):
     """
