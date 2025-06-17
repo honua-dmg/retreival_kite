@@ -52,7 +52,8 @@ class Data():
         Returns:
             dict: A dictionary mapping stock symbols to their tokens.
         """
-        df = pd.DataFrame(self.kite.instruments(exchange))
+        instruments  = self.kite.instruments(exchange)
+        df = pd.DataFrame(instruments)
         return dict(zip( df['tradingsymbol'],df['instrument_token']))
 
     def tokenStockMapping(self,exchange):
@@ -65,7 +66,8 @@ class Data():
         Returns:
             dict: A dictionary mapping tokens to their stock symbols.
         """
-        df = pd.DataFrame(self.kite.instruments(exchange))
+        instruments  = self.kite.instruments(exchange)
+        df = pd.DataFrame(instruments)
         return dict(zip( df['instrument_token'],df['tradingsymbol']))
     
     def ConvertToken(self,token):
