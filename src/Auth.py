@@ -20,7 +20,7 @@ def save_auth_code(new_auth_code):
         new_auth_code (str): The authentication code to save.
     """
     # Load existing environment variables from the .env file
-    dotenv.load_dotenv(ENVLOC)
+    dotenv.load_dotenv(ENVLOC,override=True)
     env_vars = dotenv.dotenv_values(ENVLOC)
 
     # Update with new values

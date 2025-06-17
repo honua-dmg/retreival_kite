@@ -39,7 +39,7 @@ class CSV():
             Returns:
                 dict: A dictionary mapping instrument tokens to trading symbols.
             """
-            df = pd.DataFrame(self.kite.instruments(exchange))
+            df = pd.read_csv(f"{exchange}.csv")
             return dict(zip( df['instrument_token'],df['tradingsymbol']))
         
         def ConvertToken(self,token):

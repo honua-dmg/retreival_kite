@@ -24,12 +24,16 @@ def send_email_alert(subject, body):
     dotenv.load_dotenv(ENVLOC)
     to_email = os.getenv("TO_EMAIL")
     resend.api_key = "re_H6N1UiAC_Pjssgzk6DT8yazbkjPDQrmtJ"
-    r = resend.Emails.send({
-    "from": "onboarding@resend.dev",
-    "to": to_email,
-    "subject": subject,
-    "html": body
-    })
+    try:
+        r = resend.Emails.send({
+        "from": "onboarding@resend.dev",
+        "to": to_email,
+        "subject": subject,
+        "html": body
+        })
+        print('✅ Email sent successfully.',flush=True)
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}",flush=True)
     """    
     email_address = os.getenv("EMAIL_ADDRESS")
     email_password = os.getenv("EMAIL_PASSWORD")
@@ -48,7 +52,6 @@ def send_email_alert(subject, body):
         print("✅ Email sent successfully.")
     except Exception as e:
         print(f"❌ Failed to send email: {e}")"""
-
 def report(body):
     """
     Sends an email alert with the given body.

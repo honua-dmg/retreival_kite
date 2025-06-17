@@ -12,7 +12,9 @@ from bs4 import BeautifulSoup
 
 import logging
 from upload import Upload
-
+"""
+tail -f /root/stonks/cron.log - to view live - you can also run docker logs -f stonks_app_1
+"""
 
 ENVLOC = '/app/.env'
 dotenv.load_dotenv(ENVLOC)
@@ -32,13 +34,9 @@ def get_holidays():
     # URL for Nifty Indices Holiday Calendar
     url = "https://www.niftyindices.com/resources/holiday-calendar"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
-    response = requests.get(url, headers=headers, timeout=30)
+    response = requests.get(url, headers=headers, timeout=10)
     soup = BeautifulSoup(response.text, 'html.parser')
     holiday_table = soup.find_all('tr')
     dates = []
@@ -76,19 +74,13 @@ def begin(r):
     Args:
         r (redis.Redis): The Redis connection object.
     """
-    print("Market open: ",is_market_open())
-    if not is_market_open():
-        print("Market is closed today. Exiting...")
-        r.set('end','true')
-        return
-
     print("Active threads:")
     for thread in threading.enumerate():
         print(f"Name: {thread.name}, \n\tAlive: {thread.is_alive()}\tDaemon: {thread.daemon} ")
     r.set('end','false')
     r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())# keep track of last tick time for watchdog
 
-    consumerThreads = Consumers.start_consumer_threads(PATH, num_consumers=10)
+    consumerThreads = Consumers.start_consumer_threads(PATH, num_consumers=5)
     producer_thread = threading.Thread(target=producer.heartbeat_monitor)
     
     producer_thread.start()
@@ -212,10 +204,14 @@ if __name__ == "__main__":
     begin(r)
     print("Calling end()", flush=True)
     end(r)    
-    print("Calling upload()", flush=True)
-    upload = Upload(PATH)
-    upload.upload()
-    upload.delete_old()
+    hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
+    if int(hours) >= 15 and int(mins) >= 30:
+        print("Calling upload()", flush=True)
+        upload = Upload(PATH)
+        upload.upload()
+        upload.delete_old()
+    else:
+        print('either some error happened or market is closed, not uploading files',flush=True)
     #print("Calling shutdown_containers()", flush=True)
     #shutdown_containers()
     print("Main program complete", flush=True)

@@ -13,7 +13,7 @@ import Report
 
 
 HEARTBEAT_TIMEOUT = 20
-SEND_MAIL_TIMEOUT = 200
+SEND_MAIL_TIMEOUT = 80
 class Data():
     """
     A class to manage real-time market data.
@@ -24,7 +24,6 @@ class Data():
         Initializes the Data class with necessary attributes.
         
         """
-        
         self.api_key = os.getenv('APIKEY')
         self.api_secret = os.getenv("APISECRET")
         self.user_id = os.getenv('USERID')
@@ -52,8 +51,7 @@ class Data():
         Returns:
             dict: A dictionary mapping stock symbols to their tokens.
         """
-        instruments  = self.kite.instruments(exchange)
-        df = pd.DataFrame(instruments)
+        df = pd.read_csv(f"{exchange}.csv")
         return dict(zip( df['tradingsymbol'],df['instrument_token']))
 
     def tokenStockMapping(self,exchange):
@@ -66,8 +64,7 @@ class Data():
         Returns:
             dict: A dictionary mapping tokens to their stock symbols.
         """
-        instruments  = self.kite.instruments(exchange)
-        df = pd.DataFrame(instruments)
+        df = pd.read_csv(f"{exchange}.csv")
         return dict(zip( df['instrument_token'],df['tradingsymbol']))
     
     def ConvertToken(self,token):
@@ -101,7 +98,7 @@ class Data():
                 self.r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
                 tick['tradable'] = ''
                 stream = self.ConvertToken(tick['instrument_token']).split(':')[1] # only token not NSE OR BSE will be accounted for. 
-                self.r.xadd(stream,{'data':json.dumps(tick,default=str)},maxlen=1000)
+                self.r.xadd(stream,{'data':json.dumps(tick,default=str)},approximate=True)
 
     def on_connect(self,ws, response):
         """
@@ -221,7 +218,7 @@ def heartbeat_monitor():
     except TypeError:
         last_tick_time = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()
         r.set('time',last_tick_time)
-    counter = 0
+    counter=0    
     while True:
         try:
             r.get('time')
@@ -245,12 +242,11 @@ def heartbeat_monitor():
             r.set('end','true')
             break
 
-        if diff > HEARTBEAT_TIMEOUT:
+        if diff >  HEARTBEAT_TIMEOUT:
             print(f"💔 No tick for {diff:.1f}s. Attempting reconnect...")
             counter+=1
-            
 
-            if counter>=SEND_MAIL_TIMEOUT/HEARTBEAT_TIMEOUT:
+            if counter>= SEND_MAIL_TIMEOUT/HEARTBEAT_TIMEOUT:
                 if is_connected():
                     Report.send_email_alert(
                         subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'%Y:%m:%d%H:%M:%S')} KITE WEBSOCKET MALFUNCTION",
@@ -279,7 +275,7 @@ def heartbeat_monitor():
                 
 
             except Exception as e:
-                if counter==SEND_MAIL_TIMEOUT/(2*HEARTBEAT_TIMEOUT):
+                if counter>=SEND_MAIL_TIMEOUT/(2*HEARTBEAT_TIMEOUT):
                     if is_connected():
                         Report.send_email_alert(
                             subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'%Y:%m:%d%H:%M:%S')}",
@@ -300,7 +296,6 @@ def heartbeat_monitor():
                     break
                 print(f"RECONNECT ISSUES: {e}")
                 print(f"⚠️ Reconnect failed: {e}")
-
 
 
         
