@@ -6,12 +6,10 @@ from kiteconnect import KiteConnect
 import json
 import threading
 import pandas as pd
-import Report
 import datetime as dt
 import time
 from collections import defaultdict
 import math
-import Report
 ENVLOC = '/app/.env'
 class Consumer():
     def __init__(self,directory,num_consumers):
@@ -45,7 +43,7 @@ class Consumer():
             
                 # Add cleanup thread
         self.cleanup_thread = None
-        self.cleanup_interval = 10  # Run cleanup every 5 minutes
+        self.cleanup_interval = 300  # Run cleanup every 5 minutes
         self.cleanup_running = False
         self.cleanup_lag = 100  
     def ConvertToken(self,token):
@@ -97,24 +95,6 @@ class Consumer():
         self.cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True,name='Cleanup manager')
         self.cleanup_thread.start()
 
-    def _stock_hash_watchdog(self):
-        """A diagnostic thread that continuously monitors the existence of the 'stocks' hash."""
-        print("[WATCHDOG] Starting 'stocks' hash monitor.")
-        key_existed = self.r.exists('stocks')
-        while self.r.get('end') != 'true':
-            time.sleep(1)  # Check every second
-            currently_exists = self.r.exists('stocks')
-            if key_existed and not currently_exists:
-                print(f"[CRITICAL] WATCHDOG DETECTED 'STOCKS' HASH DISAPPEARED AT {dt.datetime.now()}", flush=True)
-                Report.send_email("STOCKS HASH DISAPPEARED",f"[CRITICAL] WATCHDOG DETECTED 'STOCKS' HASH DISAPPEARED AT {dt.datetime.now()}")
-                self.r.set('end','true')
-            if not key_existed and currently_exists:
-                print(f"[INFO] WATCHDOG DETECTED 'STOCKS' HASH REAPPEARED AT {dt.datetime.now()}", flush=True)
-                Report.send_email("STOCKS HASH REAPPEARED",f"[INFO] WATCHDOG DETECTED 'STOCKS' HASH REAPPEARED AT {dt.datetime.now()}")
-
-            key_existed = currently_exists
-        print("[WATCHDOG] Shutting down 'stocks' hash monitor.")
-
 
     def tokenStockMapping(self,exchange):
         """
@@ -129,6 +109,7 @@ class Consumer():
         df = pd.read_csv(f"{exchange}.csv")
         return dict(zip( df['instrument_token'],df['tradingsymbol']))
     
+
     def next_redis_id(self,msg_id):
         if not msg_id or '-' not in msg_id:
             return "0-0"  # or optionally raise an error
@@ -299,23 +280,18 @@ def start_consumer_threads(directory,num_consumers):
         def run_thread_monitor():
             self.start_thread_monitor()
 
-        def run_scheduler():
-            self.start_scheduler()
 
         def run_save_data():
             self.saveData()
-        
 
         # Create threads
         t_monitor = threading.Thread(target=run_thread_monitor, name="ThreadMonitorStarter")
 
-        #t_scheduler = threading.Thread(target=run_scheduler, name="SchedulerStarter")
         t_save_data = threading.Thread(target=run_save_data, name="SaveDataStarter")
         t_stock_hash_watchdog = threading.Thread(target=self._stock_hash_watchdog, name="StockHashWatchdog")
         self.start_cleanup_thread()
         # Start threads
         t_monitor.start()
-        #t_scheduler.start()
         t_save_data.start()
         t_stock_hash_watchdog.start()
 
