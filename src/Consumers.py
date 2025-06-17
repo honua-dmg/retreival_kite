@@ -308,13 +308,14 @@ def start_consumer_threads(directory,num_consumers):
 
         # Create threads
         t_monitor = threading.Thread(target=run_thread_monitor, name="ThreadMonitorStarter")
-        t_scheduler = threading.Thread(target=run_scheduler, name="SchedulerStarter")
+
+        #t_scheduler = threading.Thread(target=run_scheduler, name="SchedulerStarter")
         t_save_data = threading.Thread(target=run_save_data, name="SaveDataStarter")
         t_stock_hash_watchdog = threading.Thread(target=self._stock_hash_watchdog, name="StockHashWatchdog")
         self.start_cleanup_thread()
         # Start threads
         t_monitor.start()
-        t_scheduler.start()
+        #t_scheduler.start()
         t_save_data.start()
         t_stock_hash_watchdog.start()
 
