@@ -1,4 +1,4 @@
-import redis
+
 import os
 import datetime as dt
 import dotenv
@@ -7,7 +7,7 @@ import ssl
 import os
 from email.message import EmailMessage
 import resend
-
+from redis_client import r
 
 ENVLOC = '/app/.env'
 def send_email_alert(subject, body):
@@ -156,7 +156,6 @@ def build_email_body(redis_count, nse_data, bse_data, extra_sections=None):
 
 if __name__ == "__main__":
     dotenv.load_dotenv(ENVLOC)
-    r = redis.Redis(host="redis",port="6379",db=0)
     path = os.getenv("FILEPATH")
     date= dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
     nse = count(path=os.path.join(path,'NSE'),date=date)
@@ -164,7 +163,6 @@ if __name__ == "__main__":
     extra = {'actual count':nse[0][1]+bse[0][1]}
     body = build_email_body(
         redis_count=sum([r.xlen(x) for x in os.getenv("STOCKS").split(",")]),
-
         nse_data=nse,
         bse_data=bse,
         extra_sections=extra

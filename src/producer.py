@@ -3,14 +3,13 @@ from kiteconnect import KiteConnect,KiteTicker
 import Auth
 import pandas as pd
 import time
-import redis
 import json
 import multiprocessing
 import Auth
 import datetime as dt
 import requests
 import Report
-
+from redis_client import r
 
 HEARTBEAT_TIMEOUT = 20
 SEND_MAIL_TIMEOUT = 80
@@ -36,7 +35,7 @@ class Data():
         self.tokens = [ nse[x] for x in self.stocks if x in nse.keys()]+ [bse[x] for x in self.stocks if x in bse.keys()] #nse stocks
         self.nse = self.tokenStockMapping("NSE")
         self.bse = self.tokenStockMapping("BSE")
-        self.r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
+        self.r = r
         self.access_token = Auth.getAuth()
         # our websocket will be running here
         self.runningThread = None
@@ -167,7 +166,6 @@ def Producer_worker():
     """
     The main function to start the producer.
     """
-    r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
     main = Data()
     r.set('end','false')
     try:
@@ -212,26 +210,39 @@ def heartbeat_monitor():
 
     """
     p = InitialiseProducer()
-    r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
     try:
-        last_tick_time = float(r.get('time'))
+        last_tick_time_str = r.get('time')
+        if last_tick_time_str is None:
+            print("💔 Heartbeat key 'time' is missing. Assuming connection is lost.", flush=True)
+            last_tick_time = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()
+            r.set('time',last_tick_time)
+        else:
+            last_tick_time = float(last_tick_time_str)
     except TypeError:
         last_tick_time = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()
         r.set('time',last_tick_time)
     counter=0    
     while True:
+        time.sleep(HEARTBEAT_TIMEOUT)
+
         try:
-            r.get('time')
+            last_tick_time_str = r.get('time')
+            if last_tick_time_str is None:
+                print("💔 Heartbeat key 'time' is missing. Assuming connection is lost.", flush=True)
+                diff = HEARTBEAT_TIMEOUT + 1  # Force a reconnect attempt
+            else:
+                last_tick_time = float(last_tick_time_str)
+                now = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30))).timestamp()
+                diff = now - last_tick_time
         except redis.exceptions.ConnectionError:
+            print("Redis connection lost. Shutting down.", flush=True)
             p.terminate()
             p.join()
-            r.set('end','true')
-            break   
-
-        time.sleep(HEARTBEAT_TIMEOUT)
-        last_tick_time = float(r.get('time'))
-        now = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()
-        diff = now - last_tick_time
+            r.set('end', 'true')
+            break
+        except (ValueError, TypeError):
+            print(f"⚠️ Could not parse heartbeat time from Redis. Assuming connection is lost.", flush=True)
+            diff = HEARTBEAT_TIMEOUT + 1  # Force a reconnect attempt
 
         now_time = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30)))
         if now_time.hour >= 15 and now_time.minute >= 30:

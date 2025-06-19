@@ -1,6 +1,5 @@
 import producer
 import Consumers 
-import redis
 import threading
 import datetime as dt
 import time
@@ -9,9 +8,11 @@ import dotenv
 import os
 import requests
 from bs4 import BeautifulSoup
-
 import logging
 from upload import Upload
+from redis_client import r
+import simulator
+
 """
 tail -f /root/stonks/cron.log - to view live - you can also run docker logs -f stonks_app_1
 """
@@ -21,36 +22,7 @@ dotenv.load_dotenv(ENVLOC)
 
 PATH = '/app/data'
 def sleep_till9(hours,mins,seconds):
-    
     return 9*3600+15*60- ( int(hours)*3600 + int(mins)*60+int(seconds) )
-
-def get_holidays():
-    """
-    Fetches the holiday dates from the Nifty Indices website.
-    
-    Returns:
-        list: A list of holiday dates as strings.
-    """
-    # URL for Nifty Indices Holiday Calendar
-    url = "https://www.niftyindices.com/resources/holiday-calendar"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    response = requests.get(url, headers=headers, timeout=10)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    holiday_table = soup.find_all('tr')
-    dates = []
-
-
-    # Iterate through each row (skipping the header row)
-    for row in holiday_table[1:]:  # Starting from the second row
-        cols = row.find_all('td')
-        
-        # Check if there are columns in this row
-        if len(cols) > 3:
-            date = cols[1].get_text(strip=True)
-            dates.append(date)
-    return dates
 
 def is_market_open():
     """
@@ -67,34 +39,40 @@ def is_market_open():
     # Check if today is in the list of holidays
     return today not in holidays or today.weekday() < 5  # Market is closed on weekends (Saturday=5, Sunday=6)
 
-def begin(r):
+def begin():
     """
-    Starts the main program.
-    
-    Args:
-        r (redis.Redis): The Redis connection object.
+    This function is called at the beginning of the program. It starts the consumer threads and the producer/simulator.
     """
     print("Active threads:")
     for thread in threading.enumerate():
         print(f"Name: {thread.name}, \n\tAlive: {thread.is_alive()}\tDaemon: {thread.daemon} ")
     r.set('end','false')
     r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())# keep track of last tick time for watchdog
+    simulation_mode = os.getenv("SIMULATION_MODE", "false").lower() == "true"
 
-    consumerThreads = Consumers.start_consumer_threads(PATH, num_consumers=5)
-    producer_thread = threading.Thread(target=producer.heartbeat_monitor)
+    if simulation_mode:
+        simulation_date = os.getenv("SIMULATION_DATE")
+        if not simulation_date:
+            print("[MAIN] Error: SIMULATION_MODE is true but SIMULATION_DATE is not set. Exiting.", flush=True)
+            r.set('end', 'true')
+            return
+        print(f"[MAIN] Starting in SIMULATION mode for date: {simulation_date}", flush=True)
+        p = simulator.InitialiseSimulator(simulation_date)
+        consumerThreads = Consumers.start_consumer_threads(PATH, num_consumers=5)
+        for thread in consumerThreads:
+            thread.join()
+    else:
+        producer_thread = threading.Thread(target=producer.heartbeat_monitor)
+        producer_thread.start()
+        consumerThreads = Consumers.start_consumer_threads(PATH, num_consumers=5)
+        producer_thread.join()
+        for thread in consumerThreads:
+            thread.join()   
     
-    producer_thread.start()
-    producer_thread.join()
-    for thread in consumerThreads:
-        thread.join()   
-    
-
-def end(r):
+def end():
     """
     Ends the main program.
     
-    Args:
-        r (redis.Redis): The Redis connection object.
     """
     dotenv.load_dotenv(ENVLOC)
     path = PATH
@@ -116,106 +94,54 @@ def end(r):
         r.set('end','true')
         r.flushall() 
 
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('shutdown.log'),
-        logging.StreamHandler()
-    ]
-)
-
-def run_command(command):
-    """Run a shell command and return output"""
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        if result.returncode != 0:
-            logging.error(f"Command failed: {command}")
-            logging.error(f"Error: {result.stderr}")
-            return False
-        return result.stdout
-    except Exception as e:
-        logging.error(f"Error running command: {command}")
-        logging.error(str(e))
-        return False
-
-def shutdown_containers():
-    """
-    Shuts down all containers and removes unused resources.
-    """ 
-    # Load environment variables
-    load_dotenv()
-    
-    # Stop all containers
-    logging.info("Stopping all containers...")
-    run_command("docker-compose down")
-    
-    # Remove stopped containers
-    logging.info("Removing stopped containers...")
-    run_command("docker rm -f $(docker ps -aq)")
-    
-    # Remove unused networks
-    logging.info("Removing unused networks...")
-    run_command("docker network prune -f")
-    
-    # Remove unused volumes
-    logging.info("Removing unused volumes...")
-    run_command("docker volume prune -f")
-    
-    # Check if any containers are still running
-    running_containers = run_command("docker ps -q")
-    if not running_containers:
-        logging.info("All containers have been successfully stopped and cleaned up.")
-    else:
-        logging.warning("Warning: Some containers are still running:")
-        run_command("docker ps")
-    
-    logging.info("Shutdown complete!")
-
-
 if __name__ == "__main__":
     """
     Main entry point of the program.
     
     This function is the main entry point of the program. It checks if the market is open and starts the main program.
     """
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
     dotenv.load_dotenv(ENVLOC)
-    r  = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
-    print("Starting main program", flush=True)
-    print(f"PATH: {PATH}", flush=True)
+    r.config_set('notify-keyspace-events', 'AKE')
+    logging.info("Enabled Redis Keyspace Notifications.")
+    logging.info("Starting main program")
+    logging.info(f"PATH: {PATH}")
 
 
  
     hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
-    print(f"Current time: {hours}:{mins}:{seconds}", flush=True)
+    logging.info(f"Current time: {hours}:{mins}:{seconds}")
+    if not os.getenv("SIMULATION_MODE", "false").lower() == "true": # only when not in simulation mode
+        if int(hours) < 9 or (int(hours) == 9 and int(mins) < 15):
+            logging.info("Time is before market hours")
+            if len(r.keys()) > 0:
+                logging.info("Flushing Redis")
+                r.flushall()
+            sleep_time = sleep_till9(hours, mins, seconds)
+            logging.info(f"Sleeping for {sleep_time} seconds")
+            time.sleep(sleep_time)
     
-    if int(hours) < 9 or (int(hours) == 9 and int(mins) < 15):
-        print("Time is before market hours", flush=True)
-        if len(r.keys()) > 0:
-            print("Flushing Redis", flush=True)
-            r.flushall()
-        sleep_time = sleep_till9(hours, mins, seconds)
-        print(f"Sleeping for {sleep_time} seconds", flush=True)
-        time.sleep(sleep_time)
-    
-    print("Starting main program", flush=True)
-    print("Calling begin()", flush=True)
-    begin(r)
-    print("Calling end()", flush=True)
-    end(r)    
-    hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
-    if int(hours) >= 15 and int(mins) >= 30:
-        print("Calling upload()", flush=True)
-        upload = Upload(PATH)
-        upload.upload()
-        upload.delete_old()
-    else:
-        print('either some error happened or market is closed, not uploading files',flush=True)
+
+    # begin runs irrespective of simulation mode. end runs only when not in simulation mode
+    logging.info("Starting main program")
+    logging.info("Calling begin()")
+    begin()
+    if not os.getenv("SIMULATION_MODE", "false").lower() == "true": # only when not in simulation mode
+
+        logging.info("Calling end()")
+        end()    
+        hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
+        if int(hours) >= 15 and int(mins) >= 30:
+            logging.info("Calling upload()")
+            upload = Upload(PATH)
+            upload.upload()
+            upload.delete_old()
+        else:
+            logging.info('either some error happened or market is closed, not uploading files')
     #print("Calling shutdown_containers()", flush=True)
     #shutdown_containers()
-    print("Main program complete", flush=True)
-
-
-
-
+    logging.info("Main program complete")
