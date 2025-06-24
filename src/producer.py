@@ -21,7 +21,6 @@ class Data():
     def __init__(self):
         """
         Initializes the Data class with necessary attributes.
-        
         """
         self.api_key = os.getenv('APIKEY')
         self.api_secret = os.getenv("APISECRET")
@@ -97,7 +96,7 @@ class Data():
                 self.r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
                 tick['tradable'] = ''
                 stream = self.ConvertToken(tick['instrument_token']).split(':')[1] # only token not NSE OR BSE will be accounted for. 
-                self.r.xadd(stream,{'data':json.dumps(tick,default=str)},approximate=True)
+                self.r.xadd(stream,{'data':json.dumps(tick,default=str)},maxlen=1000,approximate=True)
 
     def on_connect(self,ws, response):
         """

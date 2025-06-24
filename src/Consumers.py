@@ -6,7 +6,7 @@ from kiteconnect import KiteConnect
 import json
 import threading
 import pandas as pd
-from pymemcache.client.base import Client
+
 import datetime as dt
 import time
 from collections import defaultdict
@@ -65,7 +65,6 @@ class Consumer():
         
         Args:
             token (int): The token to convert.
-        
         Returns:
             str: The stock symbol corresponding to the token.
         """
@@ -327,12 +326,13 @@ def start_consumer_threads(directory,num_consumers=5):
 
         # Create threads
         t_monitor = threading.Thread(target=run_thread_monitor, name="ThreadMonitorStarter")
-
+        t_scheduler = threading.Thread(target=run_scheduler, name="SchedulerStarter")
         t_save_data = threading.Thread(target=run_save_data, name="SaveDataStarter")
 
 
         # Start core threads
         t_monitor.start()
+        t_scheduler.start()
         t_save_data.start()
         # Start optional threads
         consumer.start_cleanup_thread()

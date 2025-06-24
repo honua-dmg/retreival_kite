@@ -1,6 +1,9 @@
 import redis
 import os
+import dotenv
 
+ENVLOC = '/app/.env'
+dotenv.load_dotenv(ENVLOC)
 # Centralized Redis connection
 # Use a single connection pool that is shared across the application.
 r = redis.Redis(
@@ -9,3 +12,4 @@ r = redis.Redis(
     db=0,
     decode_responses=True
 )
+STOCKS = os.getenv("STOCKS").split(",")
