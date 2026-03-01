@@ -9,7 +9,8 @@ from email.message import EmailMessage
 import resend
 
 
-ENVLOC = '/app/.env'
+# Use environment variable or fallback to Docker path
+ENVLOC = os.getenv("ENVLOC", "/app/.env")
 def send_email_alert(subject, body):
     """
     Sends an email alert with the given subject and body.

@@ -35,6 +35,9 @@ ENVLOC = os.getenv("ENVLOC", "/app/.env")
 # Index futures to track
 INDEX_FUTURES = ["SENSEX", "BANKEX", "NIFTY"]
 
+# Script directory for resolving relative paths (works in Docker and locally)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 # ============================================================================
 # TIMEZONE UTILITIES
@@ -90,7 +93,8 @@ def token_to_stock_mapping(exchange: str) -> Dict[int, str]:
     Raises:
         FileNotFoundError: If the exchange CSV file doesn't exist.
     """
-    df = pd.read_csv(f"{exchange}.csv")
+    csv_path = os.path.join(_SCRIPT_DIR, f"{exchange}.csv")
+    df = pd.read_csv(csv_path)
     return dict(zip(df['instrument_token'], df['tradingsymbol']))
 
 
@@ -107,7 +111,8 @@ def stock_to_token_mapping(exchange: str) -> Dict[str, int]:
     Raises:
         FileNotFoundError: If the exchange CSV file doesn't exist.
     """
-    df = pd.read_csv(f"{exchange}.csv")
+    csv_path = os.path.join(_SCRIPT_DIR, f"{exchange}.csv")
+    df = pd.read_csv(csv_path)
     return dict(zip(df['tradingsymbol'], df['instrument_token']))
 
 
@@ -130,7 +135,7 @@ def convert_token(token: int, nse_map: Dict[int, str], bse_map: Dict[int, str]) 
     return None
 
 
-def get_fno_instruments(api_key: str, access_token: str) -> Dict[int, str]:
+def get_fno_instruments() -> Dict[int, str]:
     """
     Fetch F&O instrument tokens for major indices (SENSEX, BANKEX, NIFTY).
     
@@ -150,7 +155,6 @@ def get_fno_instruments(api_key: str, access_token: str) -> Dict[int, str]:
     base_url = "https://api.kite.trade/instruments"
     headers = {
         "X-Kite-Version": "3",
-        "Authorization": f"token {api_key}:{access_token}"
     }
     
     response = requests.get(base_url, headers=headers, timeout=30)
@@ -168,7 +172,7 @@ def get_fno_instruments(api_key: str, access_token: str) -> Dict[int, str]:
     return fno_mapping
 
 
-def get_all_fno_tokens(api_key: str, access_token: str) -> List[int]:
+def get_all_fno_tokens() -> List[int]:
     """
     Get list of all F&O instrument tokens for tracked indices.
     
@@ -179,7 +183,7 @@ def get_all_fno_tokens(api_key: str, access_token: str) -> List[int]:
     Returns:
         list: List of instrument tokens (int).
     """
-    fno_map = get_fno_instruments(api_key, access_token)
+    fno_map = get_fno_instruments()
     return list(fno_map.keys())
 
 
