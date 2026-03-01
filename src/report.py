@@ -1,173 +1,210 @@
-import redis
+"""
+Email reporting module for the Stock Market Data Collection System.
+
+This module provides email notification functionality for system alerts
+and daily data collection reports.
+
+Functions:
+    - send_email_alert: Send an email notification
+    - report: Send a daily data collection report
+    - count: Count lines in CSV files for a given date
+    - build_email_body: Build formatted email body for reports
+"""
+
 import os
-import datetime as dt
-import dotenv
-import smtplib
-import ssl
-import os
-from email.message import EmailMessage
+from typing import Dict, List, Tuple, Optional
+
 import resend
+from dotenv import load_dotenv
+
+import config
+from utils import get_ist_now, get_ist_date
 
 
-# Use environment variable or fallback to Docker path
-ENVLOC = os.getenv("ENVLOC", "/app/.env")
-def send_email_alert(subject, body):
+def send_email_alert(subject: str, body: str):
     """
-    Sends an email alert with the given subject and body.
+    Send an email alert using the Resend API.
     
     Args:
-        subject (str): The subject of the email.
-        body (str): The body of the email.
-    
-    Returns:
-        None
+        subject: Email subject line.
+        body: Email body (HTML supported).
     """
-    dotenv.load_dotenv(ENVLOC)
+    load_dotenv(config.ENVLOC)
+    
     to_email = os.getenv("TO_EMAIL")
-    resend.api_key = "re_H6N1UiAC_Pjssgzk6DT8yazbkjPDQrmtJ"
+    resend_api_key = os.getenv("RESEND_API_KEY")
+    from_email = os.getenv("FROM_EMAIL", "onboarding@resend.dev")
+    
+    if not resend_api_key:
+        print("⚠️ RESEND_API_KEY not configured. Email not sent.", flush=True)
+        return
+    
+    resend.api_key = resend_api_key
+    
     try:
-        r = resend.Emails.send({
-        "from": "onboarding@resend.dev",
-        "to": to_email,
-        "subject": subject,
-        "html": body
+        resend.Emails.send({
+            "from": from_email,
+            "to": to_email,
+            "subject": subject,
+            "html": body
         })
-        print('✅ Email sent successfully.',flush=True)
+        print('✅ Email sent successfully.', flush=True)
     except Exception as e:
-        print(f"❌ Failed to send email: {e}",flush=True)
-    """    
-    email_address = os.getenv("EMAIL_ADDRESS")
-    email_password = os.getenv("EMAIL_PASSWORD")
-    
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = email_address
-    msg['To'] = to_email
-    msg.set_content(body)
+        print(f"❌ Failed to send email: {e}", flush=True)
 
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, context=context) as smtp:
-            smtp.login(email_address, email_password)
-            smtp.send_message(msg)
-        print("✅ Email sent successfully.")
-    except Exception as e:
-        print(f"❌ Failed to send email: {e}")"""
-def report(body):
+
+def report(body: str):
     """
-    Sends an email alert with the given body.
+    Send a daily data collection report email.
     
     Args:
-        body (str): The body of the email.
-    
-    Returns:
-        None
+        body: Report body content.
     """
+    timestamp = get_ist_now().strftime('%Y-%m-%d %H:%M:%S')
     send_email_alert(
-        subject= f" DATA REVIEW: {dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'%Y:%m:%d%H:%M:%S')}",
-        body= body
+        subject=f"📊 DATA REVIEW: {timestamp}",
+        body=body
     )
-            
-def count_lines_safe(filepath):
-    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-        return sum(1 for _ in f)-1
 
-def count(path,date):
+
+def count(path: str, date: str) -> List[Tuple[str, int]]:
     """
-    Counts the number of lines in the files in the given path for the given date.
+    Count the number of data lines in CSV files for a given date.
     
     Args:
-        path (str): The path to the directory containing the files.
-        date (str): The date to count the lines for.
+        path: Directory path containing stock subdirectories.
+        date: Date string (YYYY-MM-DD format) to count data for.
     
     Returns:
-        list: A list of tuples containing the filename and the number of lines.
+        list: Sorted list of (stock_name, line_count) tuples, including a 'total' entry.
+              Returns [(0, 0)] if directory doesn't exist.
+    
+    Example:
+        >>> count('/app/data/NSE', '2026-03-01')
+        [('total', 45000), ('RELIANCE', 5000), ('INFY', 4500), ...]
     """
     files = {}
     total = 0
+    
     try:
-        for file in os.listdir(path=path):
-            if file=='.DS_Store':
+        for stock in os.listdir(path):
+            # Skip hidden files
+            if stock.startswith('.'):
                 continue
-            filepath = os.path.join(path,f'{file}')
-
-            today = os.path.join(filepath,f'{date}.csv')
+            
+            stock_dir = os.path.join(path, stock)
+            csv_file = os.path.join(stock_dir, f'{date}.csv')
+            
             try:
-                with open(today,'r') as f:
-                    files[file] = len(f.readlines())
+                with open(csv_file, 'r') as f:
+                    # Subtract 1 for header row
+                    line_count = len(f.readlines()) - 1
+                    files[stock] = max(0, line_count)
             except FileNotFoundError:
-                files[file] = 0
-            #files[file] = count_lines_safe(today)
-            total += files[file]
+                files[stock] = 0
+            
+            total += files[stock]
+            
     except FileNotFoundError:
-        return [(0,0)]
+        return [(0, 0)]
+    
     files['total'] = total
-    sortedd = sorted(files.items(),key = lambda x: x[1],reverse=True)
-    return sortedd
+    
+    # Sort by count descending
+    sorted_files = sorted(files.items(), key=lambda x: x[1], reverse=True)
+    return sorted_files
 
-def format_table(title, data):
+
+def _format_table(title: str, data: List[Tuple[str, int]]) -> str:
     """
-    Formats the given data into a table with the given title.
+    Format data as an ASCII table.
     
     Args:
-        title (str): The title of the table.
-        data (list): A list of tuples containing the data to be formatted.
+        title: Table title.
+        data: List of (name, count) tuples.
     
     Returns:
-        str: A string containing the formatted table.
+        str: Formatted table string.
     """
-    # Ensure columns align
-    max_len = max((len(str(k)) for k, _ in data), default=5)
-    lines = [f"{title}:\n"]
-    lines.append(f"{'Stock':<{max_len}}  Count")
-    lines.append("-" * (max_len + 8))
+    if not data:
+        return f"{title}:\nNo data\n"
+    
+    max_len = max(len(str(k)) for k, _ in data)
+    max_len = max(max_len, 5)  # Minimum width for "Stock"
+    
+    lines = [f"<b>{title}:</b>"]
+    lines.append(f"<pre>{'Stock':<{max_len}}  Count")
+    lines.append("-" * (max_len + 10))
+    
     for stock, count in data:
         if stock != 'total':
-            lines.append(f"{stock:<{max_len}}  {count}")
-    lines.append("\n")
+            lines.append(f"{stock:<{max_len}}  {count:,}")
+    
+    # Add total at the end
+    total = next((c for s, c in data if s == 'total'), 0)
+    lines.append("-" * (max_len + 10))
+    lines.append(f"{'TOTAL':<{max_len}}  {total:,}</pre>")
+    lines.append("")
+    
     return "\n".join(lines)
 
-def build_email_body(redis_count, nse_data, bse_data, extra_sections=None):
+
+def build_email_body(
+    redis_count: int,
+    nse_data: List[Tuple[str, int]],
+    bse_data: List[Tuple[str, int]],
+    extra_sections: Optional[Dict[str, str]] = None
+) -> str:
     """
-    Builds the email body with the given data.
+    Build a formatted HTML email body for the daily report.
     
     Args:
-        redis_count (int): The total number of records in Redis.
-        nse_data (list): A list of tuples containing the NSE data.
-        bse_data (list): A list of tuples containing the BSE data.
-        extra_sections (dict, optional): A dictionary containing extra sections to be added to the email body.
+        redis_count: Total number of records currently in Redis streams.
+        nse_data: NSE stock data counts from count().
+        bse_data: BSE stock data counts from count().
+        extra_sections: Optional additional sections to include.
     
     Returns:
-        str: A string containing the email body.
+        str: Formatted HTML email body.
     """
-    body = []
-    body.append("HELLO THERE!\n")
-    body.append(f"We got a total of {redis_count} records\n")
-
-    body.append(format_table("NSE", nse_data))
-    body.append(format_table("BSE", bse_data))
-
+    date = get_ist_date()
+    time = get_ist_now().strftime('%H:%M:%S')
+    
+    body = [
+        f"<h2>📊 Daily Data Collection Report</h2>",
+        f"<p><b>Date:</b> {date}<br><b>Time:</b> {time} IST</p>",
+        f"<p><b>Redis Stream Records:</b> {redis_count:,}</p>",
+        "<hr>",
+        _format_table("NSE Stocks", nse_data),
+        _format_table("BSE Stocks", bse_data),
+    ]
+    
     if extra_sections:
+        body.append("<hr>")
         for title, content in extra_sections.items():
-            body.append(f"{title}:\n{content}\n")
-
-    body.append("REGARDS:\nGURU SAI")
+            body.append(f"<p><b>{title}:</b> {content}</p>")
+    
+    body.append("<hr>")
+    body.append("<p>Regards,<br><b>Stock Data Collection System</b></p>")
+    
     return "\n".join(body)
 
 
 if __name__ == "__main__":
-    dotenv.load_dotenv(ENVLOC)
-    r = redis.Redis(host="redis",port="6379",db=0)
-    path = os.getenv("FILEPATH")
-    date= dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
-    nse = count(path=os.path.join(path,'NSE'),date=date)
-    bse = count(path=os.path.join(path,'BSE'),date=date)
-    extra = {'actual count':nse[0][1]+bse[0][1]}
+    # Test report generation
+    load_dotenv(config.ENVLOC)
+    
+    path = config.DATA_PATH
+    date = get_ist_date()
+    
+    nse = count(path=os.path.join(path, 'NSE'), date=date)
+    bse = count(path=os.path.join(path, 'BSE'), date=date)
+    
     body = build_email_body(
-        redis_count=sum([r.xlen(x) for x in os.getenv("STOCKS").split(",")]),
-
+        redis_count=0,
         nse_data=nse,
         bse_data=bse,
-        extra_sections=extra
-        )
-
+        extra_sections={'Test': 'This is a test report'}
+    )
+    
+    print(body)
