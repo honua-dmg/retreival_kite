@@ -76,9 +76,14 @@ class Consumer:
         # Thread coordination
         self.consumers: Dict[int, List[str]] = {}
         self.consumer_lock = threading.Lock()
-        self.rebalance_flag = threading.Event()
-        self.rebalance_flag.set()  # Start in non-blocking state
         
+        # Barrier-based synchronization for rebalancing
+        # +1 for the rebalancer thread itself
+        self.pause_barrier = threading.Barrier(num_consumers + 1)
+        self.resume_barrier = threading.Barrier(num_consumers + 1)
+        self.rebalance_requested = threading.Event()
+        self.barrier_timeout = 10  # seconds to wait for all consumers
+
         # Date for file naming
         self.date = get_ist_date()
         
@@ -130,8 +135,27 @@ class Consumer:
         worker = Save.CSV(self.directory)
         
         while self.r.get('end') != 'true':
-            # Wait if rebalancing is in progress
-            self.rebalance_flag.wait()
+            # Check if rebalance is requested - synchronize with barrier
+            if self.rebalance_requested.is_set():
+                try:
+                    print(f"[CONSUMER {consumer_id}] Pausing for rebalance...", flush=True)
+                    self.pause_barrier.wait(timeout=self.barrier_timeout)
+                    print(f"[CONSUMER {consumer_id}] Waiting for rebalance to complete...", flush=True)
+                    self.resume_barrier.wait(timeout=self.barrier_timeout)
+                    print(f"[CONSUMER {consumer_id}] Resuming after rebalance.", flush=True)
+                except threading.BrokenBarrierError:
+                    print(f"[ERROR] Consumer {consumer_id}: Barrier broken during rebalance. "
+                          f"Another thread may have died or timed out. Continuing...", flush=True)
+                    # Reset barriers to recover
+                    try:
+                        self.pause_barrier.reset()
+                        self.resume_barrier.reset()
+                    except Exception as e:
+                        print(f"[ERROR] Consumer {consumer_id}: Failed to reset barriers: {e}", flush=True)
+                    self.rebalance_requested.clear()
+                except Exception as e:
+                    print(f"[ERROR] Consumer {consumer_id}: Unexpected error during rebalance sync: {e}", flush=True)
+                    self.rebalance_requested.clear()
             
             # Get assigned stocks
             with self.consumer_lock:
@@ -193,47 +217,121 @@ class Consumer:
         Uses a greedy algorithm to distribute stocks to consumers, prioritizing
         even distribution of message counts to prevent any single consumer
         from being overloaded.
+        
+        Synchronization:
+            1. Set rebalance_requested flag
+            2. Wait at pause_barrier for all consumers to pause
+            3. Perform rebalancing
+            4. Wait at resume_barrier to release all consumers
+            5. Reset barriers for next cycle
         """
         print(f"[REBALANCE] Starting rebalancing at {dt.datetime.now()}", flush=True)
         
-        # Pause all consumers
-        self.rebalance_flag.clear()
-        time.sleep(0.5)  # Allow consumers to pause
+        # Signal all consumers to pause
+        self.rebalance_requested.set()
         
-        # Get stream sizes for all stocks
-        all_stocks = self.r.hkeys("stocks")
-        stock_counts = []
+        try:
+            # Wait for all consumers to reach the pause barrier
+            print(f"[REBALANCE] Waiting for {self.num_consumers} consumers to pause...", flush=True)
+            self.pause_barrier.wait(timeout=self.barrier_timeout)
+            print("[REBALANCE] All consumers paused. Performing rebalance...", flush=True)
+            
+        except threading.BrokenBarrierError:
+            print("[ERROR] Rebalance: Pause barrier broken! One or more consumer threads "
+                  "may have died or timed out. Aborting rebalance.", flush=True)
+            self._recover_from_broken_barrier()
+            return
+        except Exception as e:
+            print(f"[ERROR] Rebalance: Failed to synchronize consumers at pause: {e}", flush=True)
+            self._recover_from_broken_barrier()
+            return
         
-        for stock in all_stocks:
-            try:
-                count = self.r.xlen(stock)
-                stock_counts.append((stock, count))
-            except Exception as e:
-                print(f"[ERROR] Could not get stream length for {stock}: {e}", flush=True)
+        # ===== CRITICAL SECTION: All consumers are paused =====
+        try:
+            # Get stream sizes for all stocks
+            all_stocks = self.r.hkeys("stocks")
+            stock_counts = []
+            
+            for stock in all_stocks:
+                try:
+                    count = self.r.xlen(stock)
+                    stock_counts.append((stock, count))
+                except Exception as e:
+                    print(f"[ERROR] Could not get stream length for {stock}: {e}", flush=True)
+            
+            # Sort by count descending (assign largest first)
+            stock_counts.sort(key=lambda x: -x[1])
+            
+            # Greedy assignment
+            new_assignments = defaultdict(list)
+            totals = [0] * self.num_consumers
+            
+            for stock, count in stock_counts:
+                # Assign to consumer with lowest total
+                min_idx = totals.index(min(totals))
+                new_assignments[min_idx].append(stock)
+                totals[min_idx] += count
+            
+            # Update assignments atomically
+            with self.consumer_lock:
+                self.consumers = dict(new_assignments)
+            
+            # Log assignments
+            for cid, stocks in self.consumers.items():
+                print(f"[REBALANCE] Consumer {cid}: {len(stocks)} stocks, ~{totals[cid]} messages", flush=True)
+                
+        except Exception as e:
+            print(f"[ERROR] Rebalance: Failed during stock reassignment: {e}", flush=True)
+        # ===== END CRITICAL SECTION =====
         
-        # Sort by count descending (assign largest first)
-        stock_counts.sort(key=lambda x: -x[1])
+        # Clear the request flag before releasing consumers
+        self.rebalance_requested.clear()
         
-        # Greedy assignment
-        new_assignments = defaultdict(list)
-        totals = [0] * self.num_consumers
+        try:
+            # Release all consumers
+            print("[REBALANCE] Releasing consumers...", flush=True)
+            self.resume_barrier.wait(timeout=self.barrier_timeout)
+            print("[REBALANCE] All consumers resumed.", flush=True)
+            
+        except threading.BrokenBarrierError:
+            print("[ERROR] Rebalance: Resume barrier broken! Attempting recovery...", flush=True)
+            self._recover_from_broken_barrier()
+            return
+        except Exception as e:
+            print(f"[ERROR] Rebalance: Failed to release consumers: {e}", flush=True)
+            self._recover_from_broken_barrier()
+            return
         
-        for stock, count in stock_counts:
-            # Assign to consumer with lowest total
-            min_idx = totals.index(min(totals))
-            new_assignments[min_idx].append(stock)
-            totals[min_idx] += count
+        # Reset barriers for the next rebalance cycle
+        try:
+            self.pause_barrier.reset()
+            self.resume_barrier.reset()
+        except Exception as e:
+            print(f"[ERROR] Rebalance: Failed to reset barriers: {e}", flush=True)
         
-        # Update assignments atomically
-        with self.consumer_lock:
-            self.consumers = dict(new_assignments)
+        print(f"[REBALANCE] Completed at {dt.datetime.now()}", flush=True)
+
+    def _recover_from_broken_barrier(self):
+        """
+        Attempt to recover from a broken barrier state.
         
-        # Log assignments
-        for cid, stocks in self.consumers.items():
-            print(f"[REBALANCE] Consumer {cid}: {len(stocks)} stocks, ~{totals[cid]} messages", flush=True)
+        This is called when a barrier times out or breaks, typically because
+        a consumer thread has died. Resets all synchronization primitives.
+        """
+        print("[REBALANCE] Attempting barrier recovery...", flush=True)
+        self.rebalance_requested.clear()
         
-        # Resume consumers
-        self.rebalance_flag.set()
+        try:
+            self.pause_barrier.reset()
+        except Exception as e:
+            print(f"[ERROR] Recovery: Failed to reset pause_barrier: {e}", flush=True)
+        
+        try:
+            self.resume_barrier.reset()
+        except Exception as e:
+            print(f"[ERROR] Recovery: Failed to reset resume_barrier: {e}", flush=True)
+        
+        print("[REBALANCE] Barrier recovery complete. Next rebalance may succeed.", flush=True)
 
     # =========================================================================
     # MONITORING THREADS
