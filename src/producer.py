@@ -20,7 +20,7 @@ import datetime as dt
 import requests
 from kiteconnect import KiteConnect, KiteTicker
 
-
+import Auth
 import report
 import config
 from utils import (
