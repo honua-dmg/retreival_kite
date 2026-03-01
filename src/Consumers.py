@@ -1,397 +1,403 @@
-import redis
-import Save
+"""
+Consumer module for the Stock Market Data Collection System.
+
+This module provides multi-threaded consumers that read tick data from Redis
+streams and persist them to CSV files organized by exchange/stock/date.
+
+Classes:
+    - Consumer: Manages consumer threads, load balancing, and data persistence
+
+Functions:
+    - start_consumer_threads: Initialize and start all consumer threads
+"""
+
 import os
-import dotenv
-from kiteconnect import KiteConnect
 import json
-import threading
-import pandas as pd
-import Report
-import datetime as dt
 import time
-from collections import defaultdict
 import math
-import Report
-ENVLOC = '/app/.env'
-class Consumer():
-    def __init__(self,directory,num_consumers):
+import threading
+import datetime as dt
+from collections import defaultdict
+from typing import Dict, List, Optional
+
+import pandas as pd
+from dotenv import load_dotenv
+
+import Save
+import report
+import config
+from utils import (
+    token_to_stock_mapping,
+    get_fno_instruments,
+    convert_token,
+    next_redis_stream_id,
+    get_ist_date,
+    IST
+)
+
+
+class Consumer:
+    """
+    Manages multi-threaded consumption of tick data from Redis streams.
+    
+    This class coordinates multiple consumer threads that read from Redis streams,
+    handles load balancing across stocks, monitors thread health, and manages
+    stream cleanup to prevent memory bloat.
+    
+    Attributes:
+        directory (str): Base directory for CSV file storage.
+        num_consumers (int): Number of consumer threads to run.
+        nse (dict): NSE token-to-symbol mapping.
+        bse (dict): BSE token-to-symbol mapping.
+        consumers (dict): Mapping of consumer_id -> list of assigned stocks.
+        date (str): Current date string for file naming.
+    """
+
+    def __init__(self, directory: str, num_consumers: int):
         """
-        Initializes a Consumer object with the given directory and number of consumers.
+        Initialize the Consumer manager.
         
         Args:
-            directory (str): The directory where the CSV files are stored.
-            num_consumers (int): The number of consumers to be used.
+            directory: Base directory for CSV file storage.
+            num_consumers: Number of consumer threads to run.
         """
-        dotenv.load_dotenv( ENVLOC)
+        load_dotenv(config.ENVLOC)
+        
         self.directory = directory
         self.num_consumers = num_consumers
-        self.api_key = os.getenv('APIKEY')
-        self.kite = KiteConnect(api_key=self.api_key) 
-        self.nse = self.tokenStockMapping("NSE")
-        self.bse = self.tokenStockMapping("BSE")
+        
+        # Build token mappings
+        self.nse = token_to_stock_mapping("NSE")
+        self.bse = token_to_stock_mapping("BSE")
+        
+        # Add F&O tokens
+        self._add_fno_tokens()
+        
+        # Thread coordination
+        self.consumers: Dict[int, List[str]] = {}
+        self.consumer_lock = threading.Lock()
+        self.rebalance_flag = threading.Event()
+        self.rebalance_flag.set()  # Start in non-blocking state
+        
+        # Date for file naming
+        self.date = get_ist_date()
+        
+        # Redis client
+        self.r = config.redis_client
+        self.r.set('end', 'false')
+        
+        # Initialize stocks hash in Redis
+        self._init_stocks_hash()
+        
+        # Cleanup configuration
+        self.cleanup_interval = config.CLEANUP_INTERVAL
+        self.cleanup_lag = config.CLEANUP_LAG
 
-        self.consumers = {}
-        self.consumerLock = threading.Lock()
-        self.date = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
-        self.rebalance_flag = threading.Event()  # shared across threads
-        self.rebalance_flag.set()
-        self.r  = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
-        self.r.set('end','false')
+    def _add_fno_tokens(self):
+        """Fetch and add F&O tokens for major indices."""
+        try:
+            fno_mapping = get_fno_instruments()
+            self.nse.update(fno_mapping)
+        except Exception as e:
+            print(f"⚠️ Failed to fetch F&O instruments: {e}", flush=True)
+
+    def _init_stocks_hash(self):
+        """Initialize the stocks hash in Redis for tracking processed message IDs."""
         print(f"[DEBUG] Stocks in Redis: {self.r.hkeys('stocks')}")
         if not self.r.exists('stocks'):
-            # Initialize stocks in Redis if not already present
             print("[INFO] Initializing stocks in Redis...")
-            self.r.hset('stocks', mapping={x:"0" for x in os.getenv("STOCKS").split(",")})
-            
-                # Add cleanup thread
-        self.cleanup_thread = None
-        self.cleanup_interval = 10  # Run cleanup every 5 minutes
-        self.cleanup_running = False
-        self.cleanup_lag = 100  
-    def ConvertToken(self,token):
+            stocks = config.get_stocks_list()
+            self.r.hset('stocks', mapping={s: "0" for s in stocks})
+
+    def _convert_token(self, token: int) -> Optional[str]:
+        """Convert instrument token to EXCHANGE:SYMBOL format."""
+        return convert_token(token, self.nse, self.bse)
+
+    # =========================================================================
+    # CONSUMER THREAD
+    # =========================================================================
+
+    def _csv_consumer(self, consumer_id: int):
         """
-        Converts a token to a stock symbol.
+        Consumer thread that reads from Redis streams and saves to CSV.
+        
+        Each consumer is assigned a subset of stocks to process. It reads
+        from the corresponding Redis streams and writes tick data to CSV files.
         
         Args:
-            token (int): The token to convert.
-        
-        Returns:
-            str: The stock symbol corresponding to the token.
+            consumer_id: Unique identifier for this consumer thread.
         """
-        if token in self.nse.keys():
-            return f"NSE:{self.nse[token]}"
-        elif token in self.bse.keys():
-            return f"BSE:{self.bse[token]}"
-
-    def start_cleanup_thread(self):
-        """Starts a thread that periodically cleans up Redis streams."""
+        worker = Save.CSV(self.directory)
         
-        def cleanup_loop():
-        
-            while self.r.get('end')!='true':
-                time.sleep(self.cleanup_interval)
-                print(f"STARTING CLEAN UP AT {dt.datetime.now()}",flush=True)
-                try:
-                    processed_stocks = self.r.hkeys('stocks')
-                    for stock in processed_stocks:
-                        # Get the last processed ID for this stock
-                        last_id = self.r.hget('stocks', stock)
-
-                        if not last_id or last_id == "0":
-                            continue
-                        # Get the length of the stream
-                        stream_length = self.r.xlen(stock)
-                        
-                        if stream_length <= self.cleanup_lag:
-                            continue
-                            
-                        # Update cleanup ID and trim stream
-                        self.r.xtrim(stock, minid=last_id,approximate=True)
-                    print(f"Trimmed stream {stock} to {last_id}, there are {self.r.xlen(stock)} messages left, we trimmed ±{stream_length - self.cleanup_lag} messages ",flush=True)
-                    print(f"[DEBUG] Stocks in Redis: {self.r.hgetall('stocks')}")
-                    
-                except Exception as e:
-                    print(f"[ERROR] Failed to clean up streams: {e}",flush=True)
-                    time.sleep(1)  # Wait a bit before retrying
-                    
-        self.cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True,name='Cleanup manager')
-        self.cleanup_thread.start()
-
-    def _stock_hash_watchdog(self):
-        """A diagnostic thread that continuously monitors the existence of the 'stocks' hash."""
-        print("[WATCHDOG] Starting 'stocks' hash monitor.")
-        key_existed = self.r.exists('stocks')
         while self.r.get('end') != 'true':
-            time.sleep(1)  # Check every second
-            currently_exists = self.r.exists('stocks')
-            if key_existed and not currently_exists:
-                print(f"[CRITICAL] WATCHDOG DETECTED 'STOCKS' HASH DISAPPEARED AT {dt.datetime.now()}", flush=True)
-                Report.send_email("STOCKS HASH DISAPPEARED",f"[CRITICAL] WATCHDOG DETECTED 'STOCKS' HASH DISAPPEARED AT {dt.datetime.now()}")
-                self.r.set('end','true')
-            if not key_existed and currently_exists:
-                print(f"[INFO] WATCHDOG DETECTED 'STOCKS' HASH REAPPEARED AT {dt.datetime.now()}", flush=True)
-                Report.send_email("STOCKS HASH REAPPEARED",f"[INFO] WATCHDOG DETECTED 'STOCKS' HASH REAPPEARED AT {dt.datetime.now()}")
-
-            key_existed = currently_exists
-        print("[WATCHDOG] Shutting down 'stocks' hash monitor.")
-
-
-    def tokenStockMapping(self,exchange):
-        """
-        Maps tokens to their corresponding stock symbols.
-        
-        Args:
-            exchange (str): The exchange name ('NSE' or 'BSE').
-        
-        Returns:
-            dict: A dictionary mapping tokens to their stock symbols.
-        """
-        df = pd.read_csv(f"{exchange}.csv")
-        return dict(zip( df['instrument_token'],df['tradingsymbol']))
-    
-    def next_redis_id(self,msg_id):
-        if not msg_id or '-' not in msg_id:
-            return "0-0"  # or optionally raise an error
-        ts, seq = map(int, msg_id.split('-'))
-        return f"{ts}-{seq + 1}"
-
-    def CSVConsumer(self,id):
-        """
-        Consumes data from Redis and saves it to CSV files.
-        
-        Args:
-            id (int): The ID of the consumer.
-        """
-
-        worker = Save.CSV(self.directory,self.kite )
-        
-        
-        while self.r.get('end')!='true' : # continuosly reading the incoming stream of data.
+            # Wait if rebalancing is in progress
             self.rebalance_flag.wait()
-            with self.consumerLock:
-                my_stocks = self.consumers.get(id)
+            
+            # Get assigned stocks
+            with self.consumer_lock:
+                my_stocks = self.consumers.get(consumer_id, [])
+            
             if not my_stocks:
-                print(f"CONSUMER {id} NO STOCKS ASSIGNED AT {dt.datetime.now()}")
+                print(f"[CONSUMER {consumer_id}] No stocks assigned, waiting...")
                 time.sleep(2)
                 continue
             
+            # Build stream offsets
             offsets = self.r.hmget("stocks", my_stocks)
-            if None in offsets:
-                print(f"[CONSUMER {id}] None in offsets, sleeping...",flush=True)
-
-            streams = {key:self.next_redis_id(val) 
-                    for key,val in zip(my_stocks, offsets) 
-                    if val is not None}
+            streams = {
+                stock: next_redis_stream_id(offset)
+                for stock, offset in zip(my_stocks, offsets)
+                if offset is not None
+            }
             
             if not streams:
-                print(f"[CONSUMER {id}] No STREASM assigned, sleeping...",flush=True)
-                time.sleep(1) # in the worst case event that my loadbalancer fucks up and doesn't assign any stocks to this consumer
+                print(f"[CONSUMER {consumer_id}] No streams available, waiting...")
+                time.sleep(1)
                 continue
-            messages = self.r.xread(streams,block=100)
-            if messages == []:
+            
+            # Read from streams (blocking with 100ms timeout)
+            messages = self.r.xread(streams, block=100)
+            
+            if not messages:
                 continue
-            #print(messages)
-            for stream in messages:
-                for uncoded_msg in stream[1]:
-     
-                    msg_id = uncoded_msg[0]
+            
+            # Process messages
+            for stream_name, stream_messages in messages:
+                for msg_id, msg_data in stream_messages:
                     try:
-                        data = json.loads(uncoded_msg[1]['data'])
-                        stock_name = self.ConvertToken(data['instrument_token']).split(':')[1]
+                        data = json.loads(msg_data['data'])
+                        converted = self._convert_token(data['instrument_token'])
+                        if not converted:
+                            continue
+                        
+                        stock_name = converted.split(':')[1]
                         worker.save_tick(data)
-                        if msg_id == None:
-                            print("AYOOO ISSUE FOUND MESSAGE ID IS NONE")
-                        self.r.hset('stocks',stock_name,msg_id)
+                        
+                        # Update last processed message ID
+                        self.r.hset('stocks', stock_name, msg_id)
+                        
                     except Exception as e:
-                        print(f"[ERROR] Failed to process tick {msg_id} for {stream[0]}: {e}",flush=True)
+                        print(f"[ERROR] Consumer {consumer_id} failed to process {msg_id}: {e}", flush=True)
                         continue
-        print('ending csvWorker')
-
-    def saveData(self):
-        """
-        Saves data to CSV files.
         
-        initialises the CSV files and starts the CSVConsumer threads.
-        assigns each thread with an even number of stocks at random.
-        """
-        dotenv.load_dotenv(ENVLOC)
-        Save.CSV(self.directory,self.kite).initialise()
-        No_stocks = len(os.getenv("STOCKS").split(","))
-        stocksPerConsumer = math.ceil(No_stocks/self.num_consumers)
-        threads = []
-        stocks = [key for key in self.r.hkeys("stocks")]
-        for i in range(0,No_stocks,stocksPerConsumer):
-            self.consumers[math.ceil(i/stocksPerConsumer)] = stocks[i:i+stocksPerConsumer]
-            thread = threading.Thread(target=self.CSVConsumer,args=(math.ceil(i/stocksPerConsumer),),name=f'CSVCONSUMER_{math.ceil(i/stocksPerConsumer)}')
-            threads.append(thread)
+        print(f"[CONSUMER {consumer_id}] Shutting down.")
 
-        for thread in threads:
-            thread.start()
+    # =========================================================================
+    # LOAD BALANCING
+    # =========================================================================
 
-        for thread in threads:
-            thread.join()
-        
-    def jobscheduler(self):
+    def _rebalance_stocks(self):
         """
-        Rebalances the stocks between the CSVConsumer threads.
+        Rebalance stock assignments across consumers based on stream sizes.
         
-        This function is called every hour to rebalance the stocks between the CSVConsumer threads.
-        It counts the number of lines in the CSV files for the current date and assigns the stocks to the threads
-        in a way that minimizes the total number of lines in each thread.
+        Uses a greedy algorithm to distribute stocks to consumers, prioritizing
+        even distribution of message counts to prevent any single consumer
+        from being overloaded.
         """
-        print(f"[DEBUG] Stocks in Redis: {self.r.hkeys('stocks')}")
+        print(f"[REBALANCE] Starting rebalancing at {dt.datetime.now()}", flush=True)
+        
+        # Pause all consumers
         self.rebalance_flag.clear()
-        print('set wait state.',flush=True)
-        time.sleep(.5)
-        print(f"[REBALANCE] Starting rebalancing cycle at {dt.datetime.now()}",flush=True)
-
-        all_stocks = self.r.hkeys("stocks")  # get stock names
-        bse = []
-
+        time.sleep(0.5)  # Allow consumers to pause
+        
+        # Get stream sizes for all stocks
+        all_stocks = self.r.hkeys("stocks")
+        stock_counts = []
+        
         for stock in all_stocks:
             try:
                 count = self.r.xlen(stock)
-                bse.append((stock, count))
+                stock_counts.append((stock, count))
             except Exception as e:
-                print(f"[ERROR] Could not get xlen for {stock}: {e}",flush=True)
-        bse.sort(key=lambda x: -x[1])
-        print(f"[REBALANCE] COUNT DONE: {dt.datetime.now()} Number of stocks: {len(bse)}",flush=True)
-        num_consumers = self.num_consumers  # safer than len(self.consumers)
+                print(f"[ERROR] Could not get stream length for {stock}: {e}", flush=True)
+        
+        # Sort by count descending (assign largest first)
+        stock_counts.sort(key=lambda x: -x[1])
+        
+        # Greedy assignment
         new_assignments = defaultdict(list)
-        totals = [0] * num_consumers
-        for i, (stock, count) in enumerate(bse[:num_consumers]):
-            new_assignments[i].append(stock)
-            totals[i] += count
-        for stock, count in bse[num_consumers:]:
-            min_index = totals.index(min(totals))
-            new_assignments[min_index].append(stock)
-            totals[min_index] += count
-        with self.consumerLock:
+        totals = [0] * self.num_consumers
+        
+        for stock, count in stock_counts:
+            # Assign to consumer with lowest total
+            min_idx = totals.index(min(totals))
+            new_assignments[min_idx].append(stock)
+            totals[min_idx] += count
+        
+        # Update assignments atomically
+        with self.consumer_lock:
             self.consumers = dict(new_assignments)
+        
+        # Log assignments
         for cid, stocks in self.consumers.items():
-            total_count = totals[cid]  # total count assigned to this consumer
-            print(f"[REBALANCE] Assigned {total_count} stocks to consumer {cid}, {stocks}",flush=True)
+            print(f"[REBALANCE] Consumer {cid}: {len(stocks)} stocks, ~{totals[cid]} messages", flush=True)
+        
+        # Resume consumers
         self.rebalance_flag.set()
 
-    def start_thread_monitor(self, check_interval=11):
+    # =========================================================================
+    # MONITORING THREADS
+    # =========================================================================
+
+    def _cleanup_loop(self):
         """
-        Starts a thread that monitors the CSVConsumer threads.
+        Periodically trim processed messages from Redis streams.
         
-        This function is called when the Consumer object is initialized.
-        It starts a thread that monitors the CSVConsumer threads and restarts them if they are down.
+        This prevents unbounded memory growth by removing messages that
+        have already been processed by all consumers.
         """
-        def monitor():
-            while self.r.get('end')!='true':
-                time.sleep(check_interval)
-                active = {t.name for t in threading.enumerate()}
-                for cid in self.consumers:
-                    tname = f"CSVCONSUMER_{cid}"
-                    if tname not in active:
-                        print(f"[Monitor] {tname}, responsible for :\n\t{self.consumers[cid]}\n is down. Restarting...")
-
-                        thread = threading.Thread(target=self.CSVConsumer, args=(cid,), name=tname)
-                        thread.start()
-        threading.Thread(target=monitor, daemon=True).start()
- 
-    def start_scheduler(self, interval=11):
-        """
-        Starts a thread that runs the jobscheduler function every hour.
+        while self.r.get('end') != 'true':
+            time.sleep(self.cleanup_interval)
+            print(f"[CLEANUP] Starting cleanup at {dt.datetime.now()}", flush=True)
+            
+            try:
+                for stock in self.r.hkeys('stocks'):
+                    last_id = self.r.hget('stocks', stock)
+                    
+                    if not last_id or last_id == "0":
+                        continue
+                    
+                    stream_length = self.r.xlen(stock)
+                    
+                    if stream_length <= self.cleanup_lag:
+                        continue
+                    
+                    # Trim stream up to last processed ID
+                    self.r.xtrim(stock, minid=last_id, approximate=True)
+                    new_length = self.r.xlen(stock)
+                    print(f"[CLEANUP] Trimmed {stock}: {stream_length} -> {new_length}", flush=True)
+                    
+            except Exception as e:
+                print(f"[ERROR] Cleanup failed: {e}", flush=True)
+                time.sleep(1)
         
-        This function is called when the Consumer object is initialized.
-        It starts a thread that runs the jobscheduler function every hour.
-        """
-        def loop():
-            while self.r.get('end')!='true' :
-                time.sleep(interval)
-                self.jobscheduler()
-        threading.Thread(target=loop, daemon=True).start()
+        print("[CLEANUP] Shutting down.")
 
-def start_consumer_threads(directory,num_consumers):
+    def _thread_monitor(self, check_interval: int = 11):
         """
-        Starts the following methods in separate threads within the same process:
-        - start_thread_monitor: launches internal monitoring thread(s)
-        - start_scheduler: launches internal scheduling thread(s)
-        - saveData: launches worker threads for data saving
-        """
-        self = Consumer(directory, num_consumers)
+        Monitor consumer threads and restart any that have died.
         
-
-        def run_thread_monitor():
-            self.start_thread_monitor()
-
-        def run_scheduler():
-            self.start_scheduler()
-
-        def run_save_data():
-            self.saveData()
+        Args:
+            check_interval: Seconds between health checks.
+        """
+        while self.r.get('end') != 'true':
+            time.sleep(check_interval)
+            
+            active_threads = {t.name for t in threading.enumerate()}
+            
+            for cid in self.consumers:
+                thread_name = f"CSVConsumer_{cid}"
+                if thread_name not in active_threads:
+                    print(f"[MONITOR] {thread_name} is down. Restarting...", flush=True)
+                    thread = threading.Thread(
+                        target=self._csv_consumer,
+                        args=(cid,),
+                        name=thread_name
+                    )
+                    thread.start()
         
+        print("[MONITOR] Shutting down.")
 
-        # Create threads
-        t_monitor = threading.Thread(target=run_thread_monitor, name="ThreadMonitorStarter")
-        t_scheduler = threading.Thread(target=run_scheduler, name="SchedulerStarter")
-        t_save_data = threading.Thread(target=run_save_data, name="SaveDataStarter")
-        t_stock_hash_watchdog = threading.Thread(target=self._stock_hash_watchdog, name="StockHashWatchdog")
-        self.start_cleanup_thread()
-        # Start threads
-        t_monitor.start()
-        t_scheduler.start()
-        t_save_data.start()
-        t_stock_hash_watchdog.start()
+    def _scheduler_loop(self, interval: int = 60):
+        """
+        Periodically trigger stock rebalancing.
+        
+        Args:
+            interval: Seconds between rebalance cycles.
+        """
+        while self.r.get('end') != 'true':
+            time.sleep(interval)
+            self._rebalance_stocks()
+        
+        print("[SCHEDULER] Shutting down.")
 
-        #return [t_monitor, t_scheduler, t_save_data]
-        return [t_save_data]
+    def _stocks_hash_watchdog(self):
+        """
+        Monitor the 'stocks' hash for unexpected deletion.
+        
+        If the hash disappears (e.g., due to accidental FLUSHALL),
+        this watchdog will detect it and alert the user.
+        """
+        print("[WATCHDOG] Starting stocks hash monitor.")
+        key_existed = self.r.exists('stocks')
+        
+        while self.r.get('end') != 'true':
+            time.sleep(1)
+            currently_exists = self.r.exists('stocks')
+            
+            if key_existed and not currently_exists:
+                timestamp = dt.datetime.now()
+                print(f"[CRITICAL] Stocks hash disappeared at {timestamp}!", flush=True)
+                report.send_email_alert(
+                    "🚨 STOCKS HASH DISAPPEARED",
+                    f"The 'stocks' Redis hash was deleted at {timestamp}. System shutting down."
+                )
+                self.r.set('end', 'true')
+            
+            if not key_existed and currently_exists:
+                print(f"[INFO] Stocks hash reappeared at {dt.datetime.now()}", flush=True)
+            
+            key_existed = currently_exists
+        
+        print("[WATCHDOG] Shutting down.")
+
+    # =========================================================================
+    # INITIALIZATION
+    # =========================================================================
+
+    def start(self) -> List[threading.Thread]:
+        """
+        Start all consumer and monitoring threads.
+        
+        Returns:
+            list: List of main consumer threads (for joining).
+        """
+        # Initialize CSV files
+        Save.CSV(self.directory).initialise()
+        
+        # Calculate initial stock assignments
+        stocks = self.r.hkeys("stocks")
+        stocks_per_consumer = math.ceil(len(stocks) / self.num_consumers)
+        
+        threads = []
+        for i in range(self.num_consumers):
+            start_idx = i * stocks_per_consumer
+            end_idx = start_idx + stocks_per_consumer
+            self.consumers[i] = stocks[start_idx:end_idx]
+            
+            thread = threading.Thread(
+                target=self._csv_consumer,
+                args=(i,),
+                name=f"CSVConsumer_{i}"
+            )
+            threads.append(thread)
+        
+        # Start consumer threads
+        for thread in threads:
+            thread.start()
+        
+        # Start monitoring threads (as daemons)
+        threading.Thread(target=self._cleanup_loop, daemon=True, name="CleanupManager").start()
+        threading.Thread(target=self._thread_monitor, daemon=True, name="ThreadMonitor").start()
+        threading.Thread(target=self._scheduler_loop, daemon=True, name="Scheduler").start()
+        threading.Thread(target=self._stocks_hash_watchdog, daemon=True, name="StocksWatchdog").start()
+        
+        return threads
 
 
-from unittest.mock import patch
-
-
-# Assuming your Consumer class and imports are defined above or imported
-
-def test_jobscheduler_with_init():
+def start_consumer_threads(directory: str, num_consumers: int) -> List[threading.Thread]:
     """
-    Tests the jobscheduler function with the Consumer object initialized.
+    Initialize and start all consumer threads.
     
-    This function is called when the Consumer object is initialized.
-    It tests the jobscheduler function with the Consumer object initialized.
+    This is the main entry point for the consumer subsystem. It creates
+    a Consumer instance and starts all worker and monitoring threads.
+    
+    Args:
+        directory: Base directory for CSV file storage.
+        num_consumers: Number of consumer threads to run.
+    
+    Returns:
+        list: List of main consumer threads (for joining).
     """
-    # Mock BSE tick count data (simulate what Report.count returns)
-    mock_bse_data = [
-        ('RELIANCE', 34000),
-        ('HDFCBANK', 33000),
-        ('INFY', 31000),
-        ('TCS', 30000),
-        ('IOC', 12000),
-        ('BPCL', 11000),
-        ('GAIL', 9000),
-        ('ONGC', 8000),
-        ('POWERGRID', 7000),
-        ('NTPC', 6000),
-    ]
-
-    # Mock environment variables expected by Consumer
-    mock_env = {
-        "APIKEY": "test_api_key",
-        "STOCKS": "RELIANCE,HDFCBANK,INFY,TCS,IOC,BPCL,GAIL,ONGC,POWERGRID,NTPC"
-    }
-
-    # Mock instruments returned by kite.instruments()
-    mock_instruments = [
-        {"instrument_token": 1111, "tradingsymbol": "RELIANCE"},
-        {"instrument_token": 2222, "tradingsymbol": "HDFCBANK"},
-        {"instrument_token": 3333, "tradingsymbol": "INFY"},
-        {"instrument_token": 4444, "tradingsymbol": "TCS"},
-        {"instrument_token": 5555, "tradingsymbol": "IOC"},
-        {"instrument_token": 6666, "tradingsymbol": "BPCL"},
-        {"instrument_token": 7777, "tradingsymbol": "GAIL"},
-        {"instrument_token": 8888, "tradingsymbol": "ONGC"},
-        {"instrument_token": 9999, "tradingsymbol": "POWERGRID"},
-        {"instrument_token": 1010, "tradingsymbol": "NTPC"},
-    ]
-
-    with patch.dict(os.environ, mock_env), \
-         patch('kiteconnect.KiteConnect') as MockKite, \
-         patch('Report.count', return_value=[None] + mock_bse_data):
-
-        # Setup the mock kite instance
-        mock_kite = MockKite.return_value
-        mock_kite.instruments.return_value = mock_instruments
-
-        # Create the Consumer instance
-        consumer = Consumer(directory="./mockdata", num_consumers=3)
-
-        # Run the jobscheduler method which reassigns stocks to consumers
-        consumer.jobscheduler()
-
-        # Print the output for verification
-        print("\n[TEST] Rebalanced Assignments:")
-        for cid, stocks in consumer.consumers.items():
-            total_ticks = sum(dict(mock_bse_data).get(stock, 0) for stock in stocks)
-            #print(f"Consumer {cid}: {stocks} | Total Tick Load: {total_ticks}")
-
-        # Assertions (basic checks)
-        assert len(consumer.consumers) == 3, "Should have 3 consumer groups"
-        assert all(len(stocks) > 0 for stocks in consumer.consumers.values()), "Each consumer must have stocks assigned"
-
-
-if __name__ == '__main__':
-    test_jobscheduler_with_init()
+    consumer = Consumer(directory, num_consumers)
+    return consumer.start()
