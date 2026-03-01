@@ -1,137 +1,187 @@
-import datetime as dt
-import dotenv
+"""
+CSV persistence module for the Stock Market Data Collection System.
+
+This module handles writing tick data to CSV files organized by
+exchange, stock symbol, and date.
+
+Classes:
+    - CSV: Manages CSV file creation and tick data persistence
+
+File Structure:
+    data/
+    ├── NSE/
+    │   ├── RELIANCE/
+    │   │   ├── 2026-03-01.csv
+    │   │   └── 2026-03-02.csv
+    │   └── INFY/
+    │       └── ...
+    └── BSE/
+        └── ...
+"""
+
 import os
 import csv
-import pandas as pd
-import dotenv
+import datetime as dt
+import threading
+from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
-from tzlocal import get_localzone # to get local timezone
+from tzlocal import get_localzone
 
-ENVLOC = '/app/.env'
-class CSV():
-        def __init__(self,directory:str,kite) -> None:
-            """
-            Initializes a CSV object with the given directory and KiteConnect instance.
-            
-            Args:
-                directory (str): The directory where the CSV files are stored.
-                kite (KiteConnect): The KiteConnect instance.
-            """
-            self.dir = directory # to know where we have to save our shit
-            self.initialised = False
-            self.kite = kite
-            dotenv.load_dotenv(ENVLOC)
-            
-            self.stonks = os.getenv("STOCKS").split(",") # ['LTIM',"SBIN",'BAJFINANCE',...]
-            self.nse = self.tokenStockMapping("NSE") # {token: stockname NSE}
-            self.bse = self.tokenStockMapping("BSE") # {token :stockname BSE}
-            self.local_tz = get_localzone() 
-            self.ist = ZoneInfo("Asia/Kolkata")
-            self.india_date=dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
+from dotenv import load_dotenv
+
+import config
+from utils import (
+    token_to_stock_mapping,
+    convert_token,
+    get_ist_date,
+    IST_ZONE
+)
+
+
+# CSV header columns
+CSV_HEADER = [
+    'timestamp', 'stonk', 'last_price', 'last_traded_quantity',
+    'average_traded_price', 'volume_traded', 'total_buy_quantity', 'total_sell_quantity',
+    'open', 'high', 'low', 'close', 'change', 'oi', 'oi_day_high', 'oi_day_low'
+]
+
+# Add depth columns (5 levels of buy/sell)
+for i in range(1, 6):
+    CSV_HEADER.extend([f'buy_price_{i}', f'buy_qty_{i}', f'buy_orders_{i}'])
+    CSV_HEADER.extend([f'sell_price_{i}', f'sell_qty_{i}', f'sell_orders_{i}'])
+
+
+class CSV:
+    """
+    Manages CSV file creation and tick data persistence.
+    
+    This class handles the storage of real-time tick data to CSV files,
+    organized by exchange (NSE/BSE), stock symbol, and date.
+    
+    Attributes:
+        dir (str): Base directory for data storage.
+        nse (dict): NSE token-to-symbol mapping.
+        bse (dict): BSE token-to-symbol mapping.
+        stocks (list): List of stock symbols to track.
+        date (str): Current date string (YYYY-MM-DD format).
+    """
+
+    def __init__(self, directory: str):
+        """
+        Initialize the CSV manager.
         
-        def tokenStockMapping(self,exchange):
-            """
-            Maps instrument tokens to trading symbols for the given exchange.
-            
-            Args:
-                exchange (str): The exchange name (e.g., "NSE", "BSE").
-            
-            Returns:
-                dict: A dictionary mapping instrument tokens to trading symbols.
-            """
-            df = pd.read_csv(f"{exchange}.csv")
-            return dict(zip( df['instrument_token'],df['tradingsymbol']))
+        Args:
+            directory: Base directory for data storage.
+        """
+        load_dotenv(config.ENVLOC)
         
-        def ConvertToken(self,token):
-            """
-            Converts an instrument token to a trading symbol.
+        self.dir = directory
+        self.stocks = config.get_stocks_list()
+        
+        # File locks for thread-safe writes (keyed by file path)
+        self._file_locks: Dict[str, threading.Lock] = {}
+        self._locks_lock = threading.Lock()  # Lock to protect the locks dict
+        
+        # Token mappings
+        self.nse = token_to_stock_mapping("NSE")
+        self.bse = token_to_stock_mapping("BSE")
+        
+        # Timezone handling
+        self.local_tz = get_localzone()
+        self.ist = IST_ZONE
+        
+        # Date for file naming
+        self.date = get_ist_date()
+
+    def _convert_token(self, token: int) -> Optional[str]:
+        """
+        Convert instrument token to EXCHANGE:SYMBOL format.
+        
+        Args:
+            token: Instrument token.
             
-            Args:
-                token (int): The instrument token.
+        Returns:
+            str: "EXCHANGE:SYMBOL" format (e.g., "NSE:RELIANCE"), or None if not found.
+        """
+        return convert_token(token, self.nse, self.bse)
+
+    def _init_columns(self, file_path: str):
+        """
+        Initialize CSV file with header row if empty.
+        
+        Args:
+            file_path: Path to the CSV file.
+        """
+        # Skip if file already has content
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            return
+        
+        with open(file_path, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(CSV_HEADER)
+
+    def initialise(self):
+        """
+        Initialize directory structure and CSV files for all tracked stocks.
+        
+        Creates the following structure:
+            data/
+            ├── NSE/
+            │   └── {STOCK}/
+            │       └── {DATE}.csv
+            └── BSE/
+                └── {STOCK}/
+                    └── {DATE}.csv
+        """
+        # Create exchange directories
+        os.makedirs(os.path.join(self.dir, "NSE"), exist_ok=True)
+        os.makedirs(os.path.join(self.dir, "BSE"), exist_ok=True)
+        
+        for stock in self.stocks:
+            # Create stock directories for both exchanges
+            nse_dir = os.path.join(self.dir, "NSE", stock)
+            bse_dir = os.path.join(self.dir, "BSE", stock)
             
-            Returns:
-                str: The trading symbol.
-            """
-            if token in self.nse.keys():
-                return f"NSE:{self.nse[token]}"
-            elif token in self.bse.keys():
-                return f"BSE:{self.bse[token]}"
-
-        def _initcols(self,file_path):
-            """
-            args:
-                file_path: location of csv file
-            initialises columns within newly made csv files 
+            os.makedirs(nse_dir, exist_ok=True)
+            os.makedirs(bse_dir, exist_ok=True)
             
-            """
-           
-            header = [
-                'timestamp', 'stonk', 'last_price', 'last_traded_quantity',
-                'average_traded_price', 'volume_traded', 'total_buy_quantity', 'total_sell_quantity',
-                'open', 'high', 'low', 'close', 'change'
-                ]
-
-            # Add depth columns
-            for i in range(1, 6):
-                header += [f'buy_price_{i}', f'buy_qty_{i}', f'buy_orders_{i}']
-                header += [f'sell_price_{i}', f'sell_qty_{i}', f'sell_orders_{i}']
-
-            if os.path.exists(file_path) and os.path.getsize(file_path) != 0: # don't make new cols if cols already exist (file size will be nonzero )
-                return
-
-            with open(file_path, mode='a', newline='') as file:
-                writer = csv.writer(file)
-
-                # Write header if file is empty
-                if file.tell() == 0:
-                    writer.writerow(header)
-
-        def initialise(self):
-            """
-            Initialises the CSV files for each stock.
+            # Initialize today's CSV files
+            nse_file = os.path.join(nse_dir, f'{self.date}.csv')
+            bse_file = os.path.join(bse_dir, f'{self.date}.csv')
             
-            This method checks if the directories for each stock exist and creates them if necessary.
-            It also initialises the CSV files for each stock with the required columns.
-            """
-             # Create exchange directories if they don't exist
-            os.makedirs(os.path.join(self.dir, "NSE"), exist_ok=True)
-            os.makedirs(os.path.join(self.dir, "BSE"), exist_ok=True)
-            for stonk in self.stonks:
-                #check if directories exist
-            
+            self._init_columns(nse_file)
+            self._init_columns(bse_file)
 
-                NSE = os.path.join(self.dir,"NSE",stonk)
-                BSE =  os.path.join(self.dir,"BSE",stonk)
-
-                if not os.path.exists(NSE): #checking to see if file path exists
-                    os.makedirs(NSE)
-                if not os.path.exists(BSE): #checking to see if file path exists
-                    os.makedirs(BSE)          
- 
-                #check if file with type and datestamp is initialised
-                # each file will have a symbol and depth file
-                file_path_NSE = os.path.join(NSE,f'{self.india_date}.csv')
-                file_path_BSE = os.path.join(BSE,f'{self.india_date}.csv')
-                self._initcols(file_path_NSE)
-                self._initcols(file_path_BSE)
-
-        def save_tick(self,tick):
-            """
-            Saves a tick of data to a CSV file.
-            
-            Args:
-                tick (dict): The tick of data to save.
-            """
-            exchg,stock = self.ConvertToken(tick['instrument_token']).split(':')
-            directory = os.path.join(self.dir,exchg,stock)
-            file_path = os.path.join(directory,f'{self.india_date}.csv')
-            dt_naive = dt.datetime.strptime(tick['last_trade_time'], "%Y-%m-%d %H:%M:%S")
-            dt_local = dt_naive.replace(tzinfo=self.local_tz)
-            dt_ist = dt_local.astimezone(self.ist)
-
-            # get ticker
-            row = [
-            dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%H:%M:%S"),
+    def save_tick(self, tick: Dict):
+        """
+        Save a single tick to the appropriate CSV file.
+        
+        Args:
+            tick: Dictionary containing tick data from KiteTicker.
+                  Expected keys: instrument_token, last_price, ohlc, depth, etc.
+        """
+        # Get exchange and stock from token
+        converted = self._convert_token(tick['instrument_token'])
+        if not converted:
+            return
+        
+        exchange, stock = converted.split(':')
+        
+        # Build file path
+        file_path = os.path.join(self.dir, exchange, stock, f'{self.date}.csv')
+        
+        # Ensure directory exists (for dynamically added stocks)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # Ensure file has headers
+        self._init_columns(file_path)
+        
+        # Convert timestamp to IST
+        timestamp = dt.datetime.now(self.ist).strftime("%H:%M:%S")
+        
+        # Build row data
+        row = [
+            timestamp,
             tick['instrument_token'],
             tick.get('last_price'),
             tick.get('last_traded_quantity'),
@@ -139,25 +189,42 @@ class CSV():
             tick.get('volume_traded'),
             tick.get('total_buy_quantity'),
             tick.get('total_sell_quantity'),
-            tick['ohlc']['open'],
-            tick['ohlc']['high'],
-            tick['ohlc']['low'],
-            tick['ohlc']['close'],
+            tick.get('ohlc', {}).get('open'),
+            tick.get('ohlc', {}).get('high'),
+            tick.get('ohlc', {}).get('low'),
+            tick.get('ohlc', {}).get('close'),
             tick.get('change'),
-            ]
-            # Buy depth
-            for level in tick['depth']['buy']:
+            tick.get('oi'),
+            tick.get('oi_day_high'),
+            tick.get('oi_day_low'),
+        ]
+        
+        # Add buy depth (5 levels)
+        buy_depth = tick.get('depth', {}).get('buy', [])
+        for i in range(5):
+            if i < len(buy_depth):
+                level = buy_depth[i]
                 row.extend([level['price'], level['quantity'], level['orders']])
-            for _ in range(5 - len(tick['depth']['buy'])):
+            else:
                 row.extend([None, None, None])
-            
-            # Sell depth
-            for level in tick['depth']['sell']:
+        
+        # Add sell depth (5 levels)
+        sell_depth = tick.get('depth', {}).get('sell', [])
+        for i in range(5):
+            if i < len(sell_depth):
+                level = sell_depth[i]
                 row.extend([level['price'], level['quantity'], level['orders']])
-            for _ in range(5 - len(tick['depth']['sell'])):
+            else:
                 row.extend([None, None, None])
-
+        
+        # Get or create lock for this file
+        with self._locks_lock:
+            if file_path not in self._file_locks:
+                self._file_locks[file_path] = threading.Lock()
+            file_lock = self._file_locks[file_path]
+        
+        # Write to file with lock
+        with file_lock:
             with open(file_path, mode='a', newline='') as file:
                 writer = csv.writer(file)
                 writer.writerow(row)
-            #print(f"Saved tick for {tick['instrument_token']} at file {file_path}",flush=True)
