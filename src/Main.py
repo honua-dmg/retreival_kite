@@ -4,7 +4,7 @@ import redis
 import threading
 import datetime as dt
 import time
-import Report
+import report
 import dotenv
 import os
 import requests
@@ -99,10 +99,10 @@ def end(r):
     dotenv.load_dotenv(ENVLOC)
     path = PATH
     date= dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
-    nse = Report.count(path=os.path.join(path,'NSE'),date=date)
-    bse = Report.count(path=os.path.join(path,'BSE'),date=date)
+    nse = report.count(path=os.path.join(path,'NSE'),date=date)
+    bse = report.count(path=os.path.join(path,'BSE'),date=date)
     extra = {'actual count':nse[0][1]+bse[0][1]}
-    body = Report.build_email_body(
+    body = report.build_email_body(
         redis_count=sum([r.xlen(x) for x in os.getenv("STOCKS").split(",")]),
 
         nse_data=nse,
@@ -110,7 +110,7 @@ def end(r):
         extra_sections=extra
         )
     
-    Report.report(body)
+    report.report(body)
     hours, mins,seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%H:%M:%S").split(':')
     if int(hours)>=15 and int(mins)>=30:
         r.set('end','true')
@@ -126,52 +126,6 @@ logging.basicConfig(
     ]
 )
 
-def run_command(command):
-    """Run a shell command and return output"""
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        if result.returncode != 0:
-            logging.error(f"Command failed: {command}")
-            logging.error(f"Error: {result.stderr}")
-            return False
-        return result.stdout
-    except Exception as e:
-        logging.error(f"Error running command: {command}")
-        logging.error(str(e))
-        return False
-
-def shutdown_containers():
-    """
-    Shuts down all containers and removes unused resources.
-    """ 
-    # Load environment variables
-    load_dotenv()
-    
-    # Stop all containers
-    logging.info("Stopping all containers...")
-    run_command("docker-compose down")
-    
-    # Remove stopped containers
-    logging.info("Removing stopped containers...")
-    run_command("docker rm -f $(docker ps -aq)")
-    
-    # Remove unused networks
-    logging.info("Removing unused networks...")
-    run_command("docker network prune -f")
-    
-    # Remove unused volumes
-    logging.info("Removing unused volumes...")
-    run_command("docker volume prune -f")
-    
-    # Check if any containers are still running
-    running_containers = run_command("docker ps -q")
-    if not running_containers:
-        logging.info("All containers have been successfully stopped and cleaned up.")
-    else:
-        logging.warning("Warning: Some containers are still running:")
-        run_command("docker ps")
-    
-    logging.info("Shutdown complete!")
 
 
 if __name__ == "__main__":
