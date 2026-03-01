@@ -1,157 +1,197 @@
+"""
+Producer module for the Stock Market Data Collection System.
+
+This module handles the WebSocket connection to Zerodha KiteTicker and produces
+real-time market tick data to Redis streams for consumption by worker threads.
+
+Classes:
+    - TickerProducer: Manages WebSocket connection and tick data publishing
+
+Functions:
+    - heartbeat_monitor: Monitors connection health and handles reconnection
+    - is_connected: Check internet connectivity
+"""
+
 import os
-from kiteconnect import KiteConnect,KiteTicker
-import Auth
-import pandas as pd
-import time
-import redis
 import json
+import time
 import multiprocessing
-import Auth
 import datetime as dt
 import requests
-import Report
+from kiteconnect import KiteConnect, KiteTicker
+
+import Auth
+import report
+import config
+from utils import (
+    token_to_stock_mapping,
+    stock_to_token_mapping,
+    convert_token,
+    get_fno_instruments,
+    get_ist_now,
+    get_ist_timestamp,
+    IST
+)
 
 
-HEARTBEAT_TIMEOUT = 20
-SEND_MAIL_TIMEOUT = 80
-class Data():
+class TickerProducer:
     """
-    A class to manage real-time market data.
+    Manages real-time market data collection via WebSocket.
+    
+    This class connects to the Zerodha KiteTicker WebSocket API, subscribes to
+    instrument tokens, and publishes incoming tick data to Redis streams.
+    
+    Attributes:
+        api_key (str): KiteConnect API key.
+        stocks (list): List of stock symbols to track.
+        tokens (list): List of instrument tokens to subscribe to.
+        nse (dict): NSE token-to-symbol mapping.
+        bse (dict): BSE token-to-symbol mapping.
+        access_token (str): Valid Kite access token.
+        kws (KiteTicker): WebSocket ticker instance.
     """
 
     def __init__(self):
         """
-        Initializes the Data class with necessary attributes.
+        Initialize the TickerProducer with credentials and token mappings.
         
+        Loads API credentials from environment, builds token mappings for NSE/BSE,
+        and fetches F&O instrument tokens for major indices.
         """
         self.api_key = os.getenv('APIKEY')
         self.api_secret = os.getenv("APISECRET")
-        self.user_id = os.getenv('USERID')
-        self.password = os.getenv('PASSWORD')
-        self.totp_key = os.getenv('TOTPKEY')
-        self.stocks = os.getenv("STOCKS").split(",")
-        self.kite = KiteConnect(api_key=self.api_key) 
-        nse = self.stockTokenMapping('NSE')
-        bse = self.stockTokenMapping('BSE')
-        self.tokens = [ nse[x] for x in self.stocks if x in nse.keys()]+ [bse[x] for x in self.stocks if x in bse.keys()] #nse stocks
-        self.nse = self.tokenStockMapping("NSE")
-        self.bse = self.tokenStockMapping("BSE")
-        self.r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
+        self.stocks = config.get_stocks_list()
+        
+        # Build token mappings
+        nse_stock_to_token = stock_to_token_mapping('NSE')
+        bse_stock_to_token = stock_to_token_mapping('BSE')
+        
+        # Get tokens for configured stocks from both exchanges
+        self.tokens = [
+            nse_stock_to_token[s] for s in self.stocks if s in nse_stock_to_token
+        ] + [
+            bse_stock_to_token[s] for s in self.stocks if s in bse_stock_to_token
+        ]
+        
+        # Reverse mappings (token -> symbol)
+        self.nse = token_to_stock_mapping("NSE")
+        self.bse = token_to_stock_mapping("BSE")
+        
+        # Redis client
+        self.r = config.redis_client
+        
+        # Get authentication
         self.access_token = Auth.getAuth()
-        # our websocket will be running here
-        self.runningThread = None
+        
+        # Add F&O tokens for indices
+        self._add_fno_tokens()
+        
+        # WebSocket instance (created on open)
+        self.kws = None
 
-    def stockTokenMapping(self,exchange):
-        """
-        Maps stock symbols to their corresponding tokens.
-        
-        Args:
-            exchange (str): The exchange name ('NSE' or 'BSE').
-        
-        Returns:
-            dict: A dictionary mapping stock symbols to their tokens.
-        """
-        df = pd.read_csv(f"{exchange}.csv")
-        return dict(zip( df['tradingsymbol'],df['instrument_token']))
+    def _add_fno_tokens(self):
+        """Fetch and add F&O tokens for major indices (SENSEX, BANKEX, NIFTY)."""
+        try:
+            fno_mapping = get_fno_instruments(self.api_key, self.access_token)
+            self.nse.update(fno_mapping)
+            self.tokens.extend(fno_mapping.keys())
+        except Exception as e:
+            print(f"⚠️ Failed to fetch F&O instruments: {e}", flush=True)
 
-    def tokenStockMapping(self,exchange):
+    def _convert_token(self, token: int) -> str:
         """
-        Maps tokens to their corresponding stock symbols.
+        Convert instrument token to EXCHANGE:SYMBOL format.
         
         Args:
-            exchange (str): The exchange name ('NSE' or 'BSE').
-        
+            token: Instrument token.
+            
         Returns:
-            dict: A dictionary mapping tokens to their stock symbols.
+            str: "EXCHANGE:SYMBOL" format (e.g., "NSE:RELIANCE").
         """
-        df = pd.read_csv(f"{exchange}.csv")
-        return dict(zip( df['instrument_token'],df['tradingsymbol']))
-    
-    def ConvertToken(self,token):
+        return convert_token(token, self.nse, self.bse)
+
+    # =========================================================================
+    # WEBSOCKET CALLBACKS
+    # =========================================================================
+
+    def on_ticks(self, ws, ticks):
         """
-        Converts a token to a stock symbol.
+        Handle incoming tick data from WebSocket.
+        
+        For each tick, updates the heartbeat timestamp and publishes
+        the tick data to the appropriate Redis stream.
         
         Args:
-            token (int): The token to convert.
-        
-        Returns:
-            str: The stock symbol corresponding to the token.
-        """
-        if token in self.nse.keys():
-            return f"NSE:{self.nse[token]}"
-        elif token in self.bse.keys():
-            return f"BSE:{self.bse[token]}"
-        
-    ##### WEBSOCKET FUNCTIONS ######
-    def on_ticks(self,ws, ticks):
-        """
-        Handles the ticks event.
-        
-        Args:
-            ws (KiteTicker): The KiteTicker object.
-            ticks (list): The list of ticks.
+            ws: KiteTicker WebSocket instance.
+            ticks: List of tick dictionaries.
         """
         for tick in ticks:
+            if 'instrument_token' not in tick:
+                continue
             
-            #print(f"{self.ConvertToken(tick['instrument_token'])}: {tick}")
-            if 'instrument_token' in tick.keys():
-                self.r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
-                tick['tradable'] = ''
-                stream = self.ConvertToken(tick['instrument_token']).split(':')[1] # only token not NSE OR BSE will be accounted for. 
-                self.r.xadd(stream,{'data':json.dumps(tick,default=str)},approximate=True)
+            # Update heartbeat timestamp
+            self.r.set('time', get_ist_timestamp())
+            
+            # Prepare tick for Redis
+            tick['tradable'] = ''
+            
+            # Get stream name (stock symbol without exchange prefix)
+            converted = self._convert_token(tick['instrument_token'])
+            if not converted:
+                continue
+            stream = converted.split(':')[1]
+            
+            # Publish to Redis stream
+            self.r.xadd(
+                stream,
+                {'data': json.dumps(tick, default=str)},
+                approximate=True
+            )
 
-    def on_connect(self,ws, response):
+    def on_connect(self, ws, response):
         """
-        Handles the connection event.
+        Handle WebSocket connection establishment.
+        
+        Subscribes to all configured instrument tokens in FULL mode
+        (includes order book depth data).
         
         Args:
-            ws (KiteTicker): The KiteTicker object.
-            response (dict): The response from the server.
+            ws: KiteTicker WebSocket instance.
+            response: Server response dictionary.
         """
-        print("🔗 Connected. Subscribing to tokens...",flush=True)
+        print("🔗 Connected. Subscribing to tokens...", flush=True)
         ws.subscribe(self.tokens)
-        ws.set_mode(ws.MODE_FULL, self.tokens)  # You can use MODE_QUOTE or MODE_LTP too
+        ws.set_mode(ws.MODE_FULL, self.tokens)
 
-    def on_close(self,ws, code, reason):
-        """
-        Handles the close event.
-        
-        Args:
-            ws (KiteTicker): The KiteTicker object.
-            code (int): The close code.
-            reason (str): The reason for the close.
-        """
-        print("❌ Connection closed:", code, reason,flush=True)
+    def on_close(self, ws, code, reason):
+        """Handle WebSocket connection close."""
+        print(f"❌ Connection closed: {code} - {reason}", flush=True)
 
-    def on_error(self,ws, code, reason):
-        print("⚠️ Error:", code, reason,flush=True)
+    def on_error(self, ws, code, reason):
+        """Handle WebSocket errors."""
+        print(f"⚠️ Error: {code} - {reason}", flush=True)
 
-    def on_noreconnect(self,ws):
-        print("❗ No reconnect will be attempted.",flush=True)
+    def on_noreconnect(self, ws):
+        """Handle when reconnection attempts are exhausted."""
+        print("❗ No reconnect will be attempted.", flush=True)
 
-    def on_reconnect(self,ws, attempts_count):
-        print(f"🔄 Reconnect attempt #{attempts_count}",flush=True)
+    def on_reconnect(self, ws, attempts_count):
+        """Handle reconnection attempts."""
+        print(f"🔄 Reconnect attempt #{attempts_count}", flush=True)
 
-    #test this.
-    def subscribe(self):
-        self.kws.subscribe(self.tokens)
+    # =========================================================================
+    # CONNECTION MANAGEMENT
+    # =========================================================================
 
-    #test this.
-    def unsubscribe(self):
-        self.kws.unsubscribe(self.tokens)
-
-    def close(self):
-        self.kws.close()
-        del self.kws
-        #self.runningThread.join()
-        
-    
-    # Start WebSocket (blocking call)
     def open(self):
         """
-        Starts the WebSocket connection.
+        Start the WebSocket connection (blocking call).
+        
+        Initializes the KiteTicker, registers callbacks, and starts
+        the connection. This method blocks until the connection closes.
         """
-        self.r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())
+        self.r.set('time', get_ist_timestamp())
+        
         self.kws = KiteTicker(self.api_key, self.access_token)
         self.kws.on_ticks = self.on_ticks
         self.kws.on_connect = self.on_connect
@@ -159,35 +199,55 @@ class Data():
         self.kws.on_error = self.on_error
         self.kws.on_noreconnect = self.on_noreconnect
         self.kws.on_reconnect = self.on_reconnect
+        
         self.kws.connect()
 
+    def close(self):
+        """Close the WebSocket connection."""
+        if self.kws:
+            self.kws.close()
+            self.kws = None
 
 
-def Producer_worker():
+# =============================================================================
+# PRODUCER PROCESS MANAGEMENT
+# =============================================================================
+
+def _producer_worker():
     """
-    The main function to start the producer.
+    Worker function for the producer process.
+    
+    Creates a TickerProducer instance and starts the WebSocket connection.
+    This runs in a separate process to isolate WebSocket handling.
     """
-    r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
-    main = Data()
-    r.set('end','false')
+    config.redis_client.set('end', 'false')
+    producer = TickerProducer()
+    
     try:
-        print('starting socket connection')
-        main.open()
+        print('🚀 Starting WebSocket connection...', flush=True)
+        producer.open()
     except Exception as e:
-        print(e)
+        print(f"❌ Producer error: {e}", flush=True)
 
 
-def InitialiseProducer():
+def _initialize_producer() -> multiprocessing.Process:
     """
-    Initializes the producer process.
+    Initialize and start a new producer process.
+    
+    Returns:
+        multiprocessing.Process: The started producer process.
     """
-    p = multiprocessing.Process(target=Producer_worker)
-    p.start()
-    return p
+    process = multiprocessing.Process(target=_producer_worker)
+    process.start()
+    return process
 
-def is_connected():
+
+def is_connected() -> bool:
     """
-    Checks if the internet connection is available.
+    Check if internet connection is available.
+    
+    Returns:
+        bool: True if connected, False otherwise.
     """
     try:
         requests.get("https://www.google.com", timeout=5)
@@ -198,104 +258,105 @@ def is_connected():
 
 def heartbeat_monitor():
     """
-
-    Monitors the producer heartbeat and restarts the connection if it fails.
+    Monitor the producer heartbeat and handle reconnection.
     
-    This function starts a producer process and then continuously checks the time
-    of the last tick stored in Redis. 
-    If the time difference between the current
-    time and the last tick time is greater than the HEARTBEAT_TIMEOUT, it assumes
-    that the connection has failed and restarts the connection by terminating the
-    current process and starting a new one. This process is repeated indefinitely.
+    This function runs in the main process and monitors the WebSocket
+    connection health by checking the timestamp of the last received tick.
     
-    This function also sends an email to the user if the connection fails.
-
+    If no tick is received within HEARTBEAT_TIMEOUT seconds, it attempts
+    to restart the connection. After SEND_MAIL_TIMEOUT seconds of failures,
+    it sends an email alert and terminates.
+    
+    The monitor also handles graceful shutdown when market hours end (15:30 IST).
     """
-    p = InitialiseProducer()
-    r = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
+    process = _initialize_producer()
+    r = config.redis_client
+    
+    # Initialize heartbeat timestamp
     try:
         last_tick_time = float(r.get('time'))
-    except TypeError:
-        last_tick_time = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()
-        r.set('time',last_tick_time)
-    counter=0    
+    except (TypeError, ValueError):
+        last_tick_time = get_ist_timestamp()
+        r.set('time', last_tick_time)
+    
+    failure_count = 0
+    max_failures = config.SEND_MAIL_TIMEOUT // config.HEARTBEAT_TIMEOUT
+    
     while True:
+        # Check Redis connectivity
         try:
             r.get('time')
-        except redis.exceptions.ConnectionError:
-            p.terminate()
-            p.join()
-            r.set('end','true')
-            break   
-
-        time.sleep(HEARTBEAT_TIMEOUT)
-        last_tick_time = float(r.get('time'))
-        now = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp()
-        diff = now - last_tick_time
-
-        now_time = dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30)))
-        if now_time.hour >= 15 and now_time.minute >= 30:
-            print("Market closed (past 15:30). Shutting down heartbeat monitor.")
-            p.terminate() # shutting the connection down
-            print(f"terminating {p}")
-            p.join()
-            r.set('end','true')
+        except Exception:
+            print("❌ Redis connection lost. Shutting down.", flush=True)
+            process.terminate()
+            process.join()
+            r.set('end', 'true')
             break
-
-        if diff >  HEARTBEAT_TIMEOUT:
-            print(f"💔 No tick for {diff:.1f}s. Attempting reconnect...")
-            counter+=1
-
-            if counter>= SEND_MAIL_TIMEOUT/HEARTBEAT_TIMEOUT:
-                if is_connected():
-                    Report.send_email_alert(
-                        subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'%Y:%m:%d%H:%M:%S')} KITE WEBSOCKET MALFUNCTION",
-                        body="Dear Guru Sai," \
-                        "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
-                        "needs your immediate attention.\n" \
-                        "Best regards,\n" \
-                        "Guru Sai. "
-                    )
-                else:
-                    print(f"TOO MANY RECONNECT ISSUES at time: {dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'H:%M:%S')}")
-                p.terminate() # shutting the connection down
-                print(f"terminating {p}")
-                p.join()
-                r.set('end','true')
-                break
-            try:
-                # resetting the terminal link
-                p.terminate()
-                
-                p.join()
-                time.sleep(2)  # short wait before reconnect
-                p = InitialiseProducer()
-                
-                print(f'***** TIME:{diff}: time: {dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"H:%M:%S")}')
-                
-
-            except Exception as e:
-                if counter>=SEND_MAIL_TIMEOUT/(2*HEARTBEAT_TIMEOUT):
-                    if is_connected():
-                        Report.send_email_alert(
-                            subject=f"TIME:{dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'%Y:%m:%d%H:%M:%S')}",
-                            body=f"Dear Guru Sai," \
-                            "\n I hope you are doing well. It should be brought to your immediate attention that something has gone awry and\n" \
-                            "needs your immediate attention. The following error has been observed\n " \
-                            "{e}\n"\
-                            "Best regards,\n" \
-                            "Guru Sai. "
-                        )
-
-                    else:
-                        print(f"internet not connected at time: {dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),'H:%M:%S')}")
-                    p.terminate() # shutting the connection down
-                    print(f"terminating {p}")
-                    p.join()
-                    r.set('end','true')
-                    break
-                print(f"RECONNECT ISSUES: {e}")
-                print(f"⚠️ Reconnect failed: {e}")
-
-
         
+        time.sleep(config.HEARTBEAT_TIMEOUT)
+        
+        # Check if market is closed
+        now = get_ist_now()
+        if now.hour >= config.MARKET_CLOSE_HOUR and now.minute >= config.MARKET_CLOSE_MINUTE:
+            print("📈 Market closed (past 15:30). Shutting down heartbeat monitor.", flush=True)
+            process.terminate()
+            process.join()
+            r.set('end', 'true')
+            break
+        
+        # Check heartbeat
+        try:
+            last_tick_time = float(r.get('time'))
+        except (TypeError, ValueError):
+            continue
+            
+        diff = get_ist_timestamp() - last_tick_time
+        
+        if diff > config.HEARTBEAT_TIMEOUT:
+            failure_count += 1
+            print(f"💔 No tick for {diff:.1f}s. Failure count: {failure_count}/{max_failures}", flush=True)
+            
+            if failure_count >= max_failures:
+                # Too many failures - send alert and shutdown
+                if is_connected():
+                    _send_failure_alert()
+                else:
+                    print(f"🌐 No internet connection at {now.strftime('%H:%M:%S')}", flush=True)
+                
+                process.terminate()
+                process.join()
+                r.set('end', 'true')
+                break
+            
+            # Attempt reconnection
+            try:
+                process.terminate()
+                process.join()
+                time.sleep(2)
+                process = _initialize_producer()
+                print(f"🔄 Reconnected at {now.strftime('%H:%M:%S')}", flush=True)
+            except Exception as e:
+                print(f"⚠️ Reconnect failed: {e}", flush=True)
+        else:
+            # Reset failure count on successful tick
+            failure_count = 0
+
+
+def _send_failure_alert():
+    """Send email alert for WebSocket connection failure."""
+    timestamp = get_ist_now().strftime('%Y-%m-%d %H:%M:%S')
+    report.send_email_alert(
+        subject=f"🚨 KITE WEBSOCKET MALFUNCTION - {timestamp}",
+        body=(
+            "Dear User,<br><br>"
+            "The Kite WebSocket connection has failed multiple times and requires attention.<br><br>"
+            f"<b>Time:</b> {timestamp}<br>"
+            "<b>Status:</b> Connection terminated after maximum retry attempts.<br><br>"
+            "Please check the system logs for more details.<br><br>"
+            "Regards,<br>"
+            "Stock Data Collection System"
+        )
+    )
+
+
+
