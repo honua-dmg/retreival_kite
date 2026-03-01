@@ -142,10 +142,6 @@ def get_fno_instruments() -> Dict[int, str]:
     This function calls the Kite API to get the current futures contracts
     for major indices and returns a mapping of their tokens to names.
     
-    Args:
-        api_key: KiteConnect API key.
-        access_token: Valid access token for authentication.
-    
     Returns:
         dict: Mapping of instrument_token (int) -> index_name (str).
     
@@ -175,10 +171,6 @@ def get_fno_instruments() -> Dict[int, str]:
 def get_all_fno_tokens() -> List[int]:
     """
     Get list of all F&O instrument tokens for tracked indices.
-    
-    Args:
-        api_key: KiteConnect API key.
-        access_token: Valid access token for authentication.
     
     Returns:
         list: List of instrument tokens (int).

@@ -20,7 +20,7 @@ import datetime as dt
 import requests
 from kiteconnect import KiteConnect, KiteTicker
 
-import Auth
+
 import report
 import config
 from utils import (
@@ -92,7 +92,7 @@ class TickerProducer:
     def _add_fno_tokens(self):
         """Fetch and add F&O tokens for major indices (SENSEX, BANKEX, NIFTY)."""
         try:
-            fno_mapping = get_fno_instruments(self.api_key, self.access_token)
+            fno_mapping = get_fno_instruments()
             self.nse.update(fno_mapping)
             self.tokens.extend(fno_mapping.keys())
         except Exception as e:
