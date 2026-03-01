@@ -14,12 +14,52 @@ import os
 import redis
 from dotenv import load_dotenv
 
+
+# ============================================================================
+# CONTAINER DETECTION
+# ============================================================================
+
+def is_running_in_container() -> bool:
+    """
+    Detect if we're running inside a Docker container.
+    
+    Checks:
+        1. /.dockerenv file (Docker creates this)
+        2. /proc/self/cgroup for docker/containerd references (Linux)
+        3. DOCKER_CONTAINER environment variable (explicit override)
+    
+    Returns:
+        bool: True if running in container, False otherwise.
+    """
+    # Explicit override via environment variable
+    if os.getenv("DOCKER_CONTAINER", "").lower() in ("1", "true", "yes"):
+        return True
+    
+    # Check for .dockerenv file
+    if os.path.exists("/.dockerenv"):
+        return True
+    
+    # Check cgroup (Linux containers)
+    try:
+        with open("/proc/self/cgroup", "r") as f:
+            content = f.read()
+            if "docker" in content or "containerd" in content or "kubepods" in content:
+                return True
+    except (FileNotFoundError, PermissionError):
+        pass
+    
+    return False
+
+
+IN_CONTAINER = is_running_in_container()
+
+
 # ============================================================================
 # ENVIRONMENT CONFIGURATION
 # ============================================================================
 
 # Default environment file location (container path, can be overridden)
-ENVLOC = os.getenv("ENVLOC", "/app/.env")
+ENVLOC = os.getenv("ENVLOC", "/app/.env" if IN_CONTAINER else ".env")
 
 # Load environment variables
 load_dotenv(ENVLOC)
@@ -28,7 +68,9 @@ load_dotenv(ENVLOC)
 # REDIS CONFIGURATION
 # ============================================================================
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+# Auto-detect Redis host: "redis" in Docker, "localhost" locally
+_DEFAULT_REDIS_HOST = "redis" if IN_CONTAINER else "localhost"
+REDIS_HOST = os.getenv("REDIS_HOST", _DEFAULT_REDIS_HOST)
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
