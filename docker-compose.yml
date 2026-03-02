@@ -5,11 +5,12 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - .env:/app/.env
-      - ${FILEPATH}:/app/data
+      - ./.env:/app/.env:ro
+      - ${DATA_HOST_PATH:-.}/data:/data
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - DATA_PATH=/data
     depends_on:
       - redis
     networks:

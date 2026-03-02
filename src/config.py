@@ -90,7 +90,8 @@ r = redis_client
 # ============================================================================
 
 # Data storage path
-DATA_PATH = os.getenv("DATA_PATH", "/app/data")
+_DEFAULT_DATA_PATH = "/data" if IN_CONTAINER else os.path.abspath("./data")
+DATA_PATH = os.getenv("DATA_PATH", _DEFAULT_DATA_PATH)
 
 # Market hours (IST)
 MARKET_OPEN_HOUR = 9
