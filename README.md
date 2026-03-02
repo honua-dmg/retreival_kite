@@ -1,6 +1,38 @@
 # Stock Market Data Collection System
 
-A system for collecting and analyzing real-time stock market data from Indian exchanges (NSE and BSE).
+A robust, production-ready system for collecting real-time stock market data from Indian exchanges (NSE and BSE) using the Zerodha KiteConnect API.
+
+## Architecture
+
+```
+┌─────────────────┐     WebSocket      ┌─────────────────┐     Redis Streams     ┌─────────────────┐
+│  Zerodha Kite   │ ─────────────────► │    Producer     │ ────────────────────► │     Redis       │
+│    Ticker       │    Real-time       │  (producer.py)  │    XADD per stock     │    Streams      │
+└─────────────────┘                    └─────────────────┘                       └────────┬────────┘
+                                                                                          │
+                                                                                          │ XREAD
+                                                                                          ▼
+┌─────────────────┐                    ┌─────────────────┐     ┌────────────────────────────────────┐
+│   CSV Files     │◄───────────────────│    Consumers    │◄────│  5 Consumer Threads                │
+│  (Data Store)   │      Save.py       │ (Consumers.py)  │     │  - Load balanced by stream size    │
+└─────────────────┘                    └─────────────────┘     │  - Self-healing with monitoring    │
+                                                               └────────────────────────────────────┘
+```
+
+## Project Structure
+
+```
+src/
+├── Main.py          # Entry point - orchestrates the pipeline
+├── producer.py      # WebSocket producer with heartbeat monitoring
+├── Consumers.py     # Multi-threaded consumers with load balancing
+├── Auth.py          # Automated Kite authentication with TOTP
+├── Save.py          # CSV file persistence
+├── report.py        # Email notifications and reporting
+├── upload.py        # Cloud storage (DigitalOcean Spaces)
+├── config.py        # Centralized configuration
+└── utils.py         # Shared utilities (token mapping, timezone, etc.)
+```
 
 ## Requirements
 
@@ -8,65 +40,113 @@ A system for collecting and analyzing real-time stock market data from Indian ex
 - KiteConnect API credentials
 - Zerodha trading account
 - Python 3.11 or higher
-- Google SMTP server for sending emails- well if you have your app password you're good to go.
+- Resend API key for email notifications (or configure your own SMTP)
 
 ## Features
 
-- Real-time market data collection from NSE and BSE
-- Automated data processing and analysis
-- Email reporting system
-- Configurable stock tracking
-- Persistent data storage
-- Redis-based caching
-- Docker containerization
-- WebSocket-based real-time updates
+- **Real-time data collection** from NSE and BSE via WebSocket
+- **Multi-threaded consumers** with automatic load balancing
+- **Self-healing** - automatic reconnection and thread recovery
+- **Heartbeat monitoring** with email alerts on failures
+- **Market hours aware** - waits for open, stops at close
+- **Holiday detection** - automatically skips market holidays
+- **Cloud backup** - uploads to DigitalOcean Spaces (S3-compatible)
+- **Redis-based message queue** for reliable data pipeline
+- **Docker containerization** for easy deployment
 ## Setup
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd stonks
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd retreival_kite
+   ```
+
+2. **Create and configure environment variables:**
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Edit the `.env` file with your credentials:
+   ```env
+   # Kite Connect API
+   APIKEY=your_kite_api_key
+   APISECRET=your_kite_api_secret
+   
+   # Zerodha Login
+   USERID=your_zerodha_user_id
+   PASSWORD=your_zerodha_password
+   TOTPKEY=your_external_totp_key  # See note below
+   
+   # Stocks to track (comma-separated)
+   STOCKS=RELIANCE,INFY,TCS,HDFCBANK
+   
+   # Email notifications (Resend API)
+   RESEND_API_KEY=your_resend_api_key
+   TO_EMAIL=your_email@example.com
+   
+   # Data storage
+   FILEPATH=/path/to/local/data
+   
+   # Cloud storage (DigitalOcean Spaces)
+   DIGITALOCEAN_KEY_ID=your_do_key_id
+   DIGITALOCEAN_KEY_SECRET=your_do_key_secret
+   DIGITALOCEAN_REGION=nyc3
+   DIGITALOCEAN_ENDPOINT=https://nyc3.digitaloceanspaces.com
+   DIGITALOCEAN_BUCKET_NAME=kite
+   ```
+
+   > **TOTP Note:** By default, Zerodha uses their proprietary TOTP. You need to 
+   > switch to an external authenticator (like Google Authenticator) and copy the 
+   > TOTP secret key to use here.
+
+3. **Build and run with Docker:**
+   ```bash
+   docker-compose --env-file .env up -d --build
+   ```
+
+
+
+## Usage
+
+The system runs automatically within Docker:
+
+1. **Waits for market open** (9:15 AM IST)
+2. **Collects data** via WebSocket until market close (3:30 PM IST)
+3. **Sends daily report** via email
+4. **Uploads to cloud** storage
+5. **Cleans up** old local files (>7 days)
+
+### Data Storage Structure
+
 ```
-2. Create and configure environment variables:
-```bash
-cp user-env/.env.example user-env/.env
-```
-Edit the .env file with your API keys, passwords, and other sensitive information.
-   APIKEY=your_api_key - kiteconnect
-   APISECRET=your_api_secret - kiteconnect
-   USERID=your_user_id - zerodha
-   PASSWORD=your_password - zerodha
-   TOTPKEY=your_totp_key - kite - this takes some finicking; by default it's linked to kite's proprietary TOTP, we need to alter it to use external TOTP apps like Google authenticator. in this process we copy the TOTP key and paste it here.
-   STOCKS=your,comma,separated,stocks
-   EMAIL_ADDRESS=your_email@example.com
-   EMAIL_PASSWORD=your_email_password - google app password - not regular password - https://support.google.com/mail/answer/185833?hl=en
-   TO_EMAIL=recipient@example.com
-   FILEPATH= where you want your data to be stored locally. 
-
-3. Build and run the Docker containers:
-```bash
-docker-compose --env-file user-env/.env up -d --build
+data/
+├── NSE/
+│   ├── RELIANCE/
+│   │   ├── 2026-03-01.csv
+│   │   └── 2026-03-02.csv
+│   └── INFY/
+│       └── ...
+└── BSE/
+    └── ...
 ```
 
+Each CSV contains:
+- Timestamp
+- Price data (last price, OHLC)
+- Volume information
+- 5-level order book depth (bid/ask)
+- Open interest (for F&O)
 
+### Monitoring
 
-## USAGE:
-The system will:
+```bash
+# View live logs
+docker-compose logs -f app
 
-1. Connect to KiteConnect using your credentials
-2. Start collecting market data for your configured stocks
-3. Process and analyze the data
-4. Generate periodic reports
-5. Store data persistently in the data/ directory
-Data Storage
-Data is stored in CSV files at:
-   data/NSE/<stock>/<date>.csv
-   data/BSE/<stock>/<date>.csv
-   Each file contains:
-
-   Real-time price data
-   Volume information
-   Buy/sell depth data
-   OHLC (Open, High, Low, Close) values
+# Check Redis streams
+docker exec -it <redis_container> redis-cli
+> XLEN RELIANCE
+```
 
 # Troubleshooting
 1. If Redis port is already in use:
