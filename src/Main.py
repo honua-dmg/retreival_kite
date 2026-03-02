@@ -1,174 +1,303 @@
-import producer
-import Consumers 
-import redis
+"""
+Main entry point for the Stock Market Data Collection System.
+
+This module orchestrates the entire data collection pipeline:
+1. Waits for market open (9:15 AM IST)
+2. Starts producer (WebSocket) and consumer (CSV writer) threads
+3. Monitors data collection until market close (3:30 PM IST)
+4. Sends daily report email
+5. Uploads data to cloud storage
+6. Cleans up old local files
+
+Usage:
+    python Main.py
+
+Environment:
+    Requires .env file with API credentials and configuration.
+    See README.md for full list of required environment variables.
+"""
+
+import os
+import time
+import logging
 import threading
 import datetime as dt
-import time
-import report
-import dotenv
-import os
+
 import requests
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 
-import logging
+import config
+import producer
+import Consumers
+import report
 from upload import Upload
-"""
-tail -f /root/stonks/cron.log - to view live - you can also run docker logs -f stonks_app_1
-"""
-
-ENVLOC = '/app/.env'
-dotenv.load_dotenv(ENVLOC)
-
-PATH = '/app/data'
-def sleep_till9(hours,mins,seconds):
-    
-    return 9*3600+15*60- ( int(hours)*3600 + int(mins)*60+int(seconds) )
-
-def get_holidays():
-    """
-    Fetches the holiday dates from the Nifty Indices website.
-    
-    Returns:
-        list: A list of holiday dates as strings.
-    """
-    # URL for Nifty Indices Holiday Calendar
-    url = "https://www.niftyindices.com/resources/holiday-calendar"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    response = requests.get(url, headers=headers, timeout=10)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    holiday_table = soup.find_all('tr')
-    dates = []
+from utils import get_ist_now, get_ist_date, IST
 
 
-    # Iterate through each row (skipping the header row)
-    for row in holiday_table[1:]:  # Starting from the second row
-        cols = row.find_all('td')
-        
-        # Check if there are columns in this row
-        if len(cols) > 3:
-            date = cols[1].get_text(strip=True)
-            dates.append(date)
-    return dates
-
-def is_market_open():
-    """
-    Checks if the market is open today based on the holiday calendar.
-    
-    Returns:
-        bool: True if the market is open, False if it is a holiday.
-    """
-
-    today = dt.datetime.now().strftime('%d-%b-%Y')
-    holidays = get_holidays()
-    today = dt.datetime.today()
-    
-    # Check if today is in the list of holidays
-    return today not in holidays or today.weekday() < 5  # Market is closed on weekends (Saturday=5, Sunday=6)
-
-def begin(r):
-    """
-    Starts the main program.
-    
-    Args:
-        r (redis.Redis): The Redis connection object.
-    """
-    print("Active threads:")
-    for thread in threading.enumerate():
-        print(f"Name: {thread.name}, \n\tAlive: {thread.is_alive()}\tDaemon: {thread.daemon} ")
-    r.set('end','false')
-    r.set('time',dt.datetime.now(dt.timezone(dt.timedelta(hours=5,minutes= 30))).timestamp())# keep track of last tick time for watchdog
-
-    consumerThreads = Consumers.start_consumer_threads(PATH, num_consumers=5)
-    producer_thread = threading.Thread(target=producer.heartbeat_monitor)
-    
-    producer_thread.start()
-    producer_thread.join()
-    for thread in consumerThreads:
-        thread.join()   
-    
-
-def end(r):
-    """
-    Ends the main program.
-    
-    Args:
-        r (redis.Redis): The Redis connection object.
-    """
-    dotenv.load_dotenv(ENVLOC)
-    path = PATH
-    date= dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%Y-%m-%d")
-    nse = report.count(path=os.path.join(path,'NSE'),date=date)
-    bse = report.count(path=os.path.join(path,'BSE'),date=date)
-    extra = {'actual count':nse[0][1]+bse[0][1]}
-    body = report.build_email_body(
-        redis_count=sum([r.xlen(x) for x in os.getenv("STOCKS").split(",")]),
-
-        nse_data=nse,
-        bse_data=bse,
-        extra_sections=extra
-        )
-    
-    report.report(body)
-    hours, mins,seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5),"%H:%M:%S").split(':')
-    if int(hours)>=15 and int(mins)>=30:
-        r.set('end','true')
-        r.flushall() 
-
-
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('shutdown.log'),
+        logging.FileHandler('app.log'),
         logging.StreamHandler()
     ]
 )
+logger = logging.getLogger(__name__)
 
+
+def _seconds_until_market_open() -> int:
+    """
+    Calculate seconds until market opens (9:15 AM IST).
+    
+    Returns:
+        int: Seconds to wait. Returns 0 if market is already open.
+    """
+    now = get_ist_now()
+    market_open = now.replace(
+        hour=config.MARKET_OPEN_HOUR,
+        minute=config.MARKET_OPEN_MINUTE,
+        second=0,
+        microsecond=0
+    )
+    
+    if now >= market_open:
+        return 0
+    
+    return int((market_open - now).total_seconds())
+
+
+def _is_after_market_close() -> bool:
+    """
+    Check if current time is after market close (3:30 PM IST).
+    
+    Returns:
+        bool: True if market is closed.
+    """
+    now = get_ist_now()
+    return (now.hour > config.MARKET_CLOSE_HOUR or 
+            (now.hour == config.MARKET_CLOSE_HOUR and now.minute >= config.MARKET_CLOSE_MINUTE))
+
+
+def get_holidays() -> list:
+    """
+    Fetch holiday dates from the Nifty Indices website.
+    
+    Returns:
+        list: List of holiday date strings (e.g., ['01-Jan-2026', '26-Jan-2026']).
+    
+    Note:
+        Returns empty list if fetching fails.
+    """
+    url = "https://www.niftyindices.com/resources/holiday-calendar"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        holiday_table = soup.find_all('tr')
+        
+        dates = []
+        for row in holiday_table[1:]:  # Skip header row
+            cols = row.find_all('td')
+            if len(cols) > 3:
+                date = cols[1].get_text(strip=True)
+                dates.append(date)
+        
+        return dates
+        
+    except Exception as e:
+        logger.warning(f"Failed to fetch holidays: {e}")
+        return []
+
+
+def is_market_open_today() -> bool:
+    """
+    Check if the market is open today.
+    
+    Checks for:
+    - Weekends (Saturday/Sunday)
+    - Public holidays from Nifty calendar
+    
+    Returns:
+        bool: True if market should be open today.
+    """
+    today = get_ist_now()
+    
+    # Check weekend
+    if today.weekday() >= 5:  # Saturday=5, Sunday=6
+        logger.info(f"Market closed: Weekend ({today.strftime('%A')})")
+        return False
+    
+    # Check holidays
+    holidays = get_holidays()
+    today_str = today.strftime('%d-%b-%Y')
+    
+    if today_str in holidays:
+        logger.info(f"Market closed: Holiday ({today_str})")
+        return False
+    
+    return True
+
+
+def begin():
+    """
+    Start the main data collection process.
+    
+    Initializes Redis state, starts consumer threads, and launches
+    the producer heartbeat monitor.
+    """
+    r = config.redis_client
+    
+    # Log active threads
+    logger.info("Active threads:")
+    for thread in threading.enumerate():
+        logger.info(f"  - {thread.name} (alive={thread.is_alive()}, daemon={thread.daemon})")
+    
+    # Initialize Redis state
+    r.set('end', 'false')
+    r.set('time', get_ist_now().timestamp())
+    
+    # Start consumers
+    logger.info(f"Starting {config.DEFAULT_NUM_CONSUMERS} consumer threads...")
+    consumer_threads = Consumers.start_consumer_threads(
+        config.DATA_PATH,
+        num_consumers=config.DEFAULT_NUM_CONSUMERS
+    )
+    
+    # Start producer with heartbeat monitoring (blocking)
+    logger.info("Starting producer heartbeat monitor...")
+    producer_thread = threading.Thread(target=producer.heartbeat_monitor)
+    producer_thread.start()
+    producer_thread.join()
+    
+    # Wait for consumers to finish
+    for thread in consumer_threads:
+        thread.join()
+    
+    logger.info("Data collection complete.")
+
+
+def end():
+    """
+    Send end-of-day report and cleanup.
+    
+    Generates a report with data collection statistics and sends it via email.
+    """
+    r = config.redis_client
+    load_dotenv(config.ENVLOC)
+    
+    date = get_ist_date()
+    path = config.DATA_PATH
+    
+    # Count collected data
+    nse_data = report.count(path=os.path.join(path, 'NSE'), date=date)
+    bse_data = report.count(path=os.path.join(path, 'BSE'), date=date)
+    
+    # Calculate total from CSVs
+    nse_total = next((c for s, c in nse_data if s == 'total'), 0)
+    bse_total = next((c for s, c in bse_data if s == 'total'), 0)
+    
+    # Get Redis stream counts
+    stocks = config.get_stocks_list()
+    redis_count = sum(r.xlen(s) for s in stocks if r.exists(s))
+    
+    # Build and send report
+    body = report.build_email_body(
+        redis_count=redis_count,
+        nse_data=nse_data,
+        bse_data=bse_data,
+        extra_sections={
+            'Total CSV Records': f'{nse_total + bse_total:,}',
+            'Collection Date': date
+        }
+    )
+    
+    report.report(body)
+    
+    # Cleanup Redis if after market close
+    if _is_after_market_close():
+        r.set('end', 'true')
+        r.flushall()
+        logger.info("Redis flushed after market close.")
+
+
+def upload_data():
+    """
+    Upload today's data to cloud storage and cleanup old files.
+    """
+    logger.info("Starting cloud upload...")
+    
+    try:
+        uploader = Upload(config.DATA_PATH)
+        uploader.upload()
+        uploader.delete_old()
+        logger.info("Cloud upload complete.")
+    except Exception as e:
+        logger.error(f"Upload failed: {e}")
+
+
+def main():
+    """
+    Main entry point for the data collection system.
+    
+    Workflow:
+    1. Load configuration
+    2. Wait for market open if before 9:15 AM
+    3. Run data collection
+    4. Send report
+    5. Upload to cloud (if after market close)
+    """
+    load_dotenv(config.ENVLOC)
+    r = config.redis_client
+    
+    logger.info("=" * 60)
+    logger.info("Stock Market Data Collection System Starting")
+    logger.info(f"Data Path: {config.DATA_PATH}")
+    logger.info(f"Current Time: {get_ist_now().strftime('%Y-%m-%d %H:%M:%S')} IST")
+    logger.info("=" * 60)
+    
+    # Check if market is open today
+    if not is_market_open_today():
+        logger.info("Market is closed today. Exiting.")
+        return
+    
+    # Wait for market open if needed
+    sleep_time = _seconds_until_market_open()
+    if sleep_time > 0:
+        logger.info(f"Waiting {sleep_time} seconds until market open (9:15 AM)...")
+        
+        # Flush Redis before market open
+        if r.dbsize() > 0:
+            logger.info("Flushing Redis before market open...")
+            r.flushall()
+        
+        time.sleep(sleep_time)
+    
+    # Run data collection
+    logger.info("Starting data collection...")
+    begin()
+    
+    # Send report
+    logger.info("Sending end-of-day report...")
+    end()
+    
+    # Upload if after market close
+    if _is_after_market_close():
+        upload_data()
+    else:
+        logger.warning("Market not closed yet. Skipping upload.")
+    
+    logger.info("=" * 60)
+    logger.info("Data collection system shutdown complete.")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
-    """
-    Main entry point of the program.
-    
-    This function is the main entry point of the program. It checks if the market is open and starts the main program.
-    """
-    dotenv.load_dotenv(ENVLOC)
-    r  = redis.Redis(host="redis",port="6379",db=0,decode_responses=True)
-    print("Starting main program", flush=True)
-    print(f"PATH: {PATH}", flush=True)
-
-
- 
-    hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
-    print(f"Current time: {hours}:{mins}:{seconds}", flush=True)
-    
-    if int(hours) < 9 or (int(hours) == 9 and int(mins) < 15):
-        print("Time is before market hours", flush=True)
-        if len(r.keys()) > 0:
-            print("Flushing Redis", flush=True)
-            r.flushall()
-        sleep_time = sleep_till9(hours, mins, seconds)
-        print(f"Sleeping for {sleep_time} seconds", flush=True)
-        time.sleep(sleep_time)
-    
-    print("Starting main program", flush=True)
-    print("Calling begin()", flush=True)
-    begin(r)
-    print("Calling end()", flush=True)
-    end(r)    
-    hours, mins, seconds = dt.datetime.strftime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5.5), "%H:%M:%S").split(':')
-    if int(hours) >= 15 and int(mins) >= 30:
-        print("Calling upload()", flush=True)
-        upload = Upload(PATH)
-        upload.upload()
-        upload.delete_old()
-    else:
-        print('either some error happened or market is closed, not uploading files',flush=True)
-    #print("Calling shutdown_containers()", flush=True)
-    #shutdown_containers()
-    print("Main program complete", flush=True)
+    main()
 
 
 
