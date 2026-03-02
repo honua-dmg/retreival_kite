@@ -27,9 +27,7 @@ import Save
 import report
 import config
 from utils import (
-    token_to_stock_mapping,
-    get_fno_instruments,
-    convert_token,
+    get_instrument_mapper,
     next_redis_stream_id,
     get_ist_date,
     IST
@@ -66,12 +64,13 @@ class Consumer:
         self.directory = directory
         self.num_consumers = num_consumers
         
-        # Build token mappings
-        self.nse = token_to_stock_mapping("NSE")
-        self.bse = token_to_stock_mapping("BSE")
+        # Initialize instrument mapper (handles all token mappings)
+        self.mapper = get_instrument_mapper()
         
-        # Add F&O tokens
-        self._add_fno_tokens()
+        # Refresh if needed
+        needs_refresh, _ = self.mapper.needs_refresh()
+        if needs_refresh:
+            self.mapper.refresh()
         
         # Thread coordination
         self.consumers: Dict[int, List[str]] = {}
@@ -98,14 +97,6 @@ class Consumer:
         self.cleanup_interval = config.CLEANUP_INTERVAL
         self.cleanup_lag = config.CLEANUP_LAG
 
-    def _add_fno_tokens(self):
-        """Fetch and add F&O tokens for major indices."""
-        try:
-            fno_mapping = get_fno_instruments()
-            self.nse.update(fno_mapping)
-        except Exception as e:
-            print(f"⚠️ Failed to fetch F&O instruments: {e}", flush=True)
-
     def _init_stocks_hash(self):
         """Initialize the stocks hash in Redis for tracking processed message IDs."""
         print(f"[DEBUG] Stocks in Redis: {self.r.hkeys('stocks')}")
@@ -116,7 +107,7 @@ class Consumer:
 
     def _convert_token(self, token: int) -> Optional[str]:
         """Convert instrument token to EXCHANGE:SYMBOL format."""
-        return convert_token(token, self.nse, self.bse)
+        return self.mapper.convert_token(token)
 
     # =========================================================================
     # CONSUMER THREAD

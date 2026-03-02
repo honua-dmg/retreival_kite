@@ -31,8 +31,7 @@ from dotenv import load_dotenv
 
 import config
 from utils import (
-    token_to_stock_mapping,
-    convert_token,
+    get_instrument_mapper,
     get_ist_date,
     IST_ZONE
 )
@@ -82,9 +81,8 @@ class CSV:
         self._file_locks: Dict[str, threading.Lock] = {}
         self._locks_lock = threading.Lock()  # Lock to protect the locks dict
         
-        # Token mappings
-        self.nse = token_to_stock_mapping("NSE")
-        self.bse = token_to_stock_mapping("BSE")
+        # Initialize instrument mapper (handles all token mappings)
+        self.mapper = get_instrument_mapper()
         
         # Timezone handling
         self.local_tz = get_localzone()
@@ -103,7 +101,7 @@ class CSV:
         Returns:
             str: "EXCHANGE:SYMBOL" format (e.g., "NSE:RELIANCE"), or None if not found.
         """
-        return convert_token(token, self.nse, self.bse)
+        return self.mapper.convert_token(token)
 
     def _init_columns(self, file_path: str):
         """

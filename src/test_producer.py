@@ -212,7 +212,7 @@ class ProducerTestBench:
             import dotenv
             import resend
             
-            dotenv.load_dotenv(report.ENVLOC)
+            dotenv.load_dotenv(config.ENVLOC)
             to_email = os.getenv("TO_EMAIL")
             
             if not to_email:

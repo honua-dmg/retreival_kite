@@ -24,10 +24,7 @@ import Auth
 import report
 import config
 from utils import (
-    token_to_stock_mapping,
-    stock_to_token_mapping,
-    convert_token,
-    get_fno_instruments,
+    get_instrument_mapper,
     get_ist_now,
     get_ist_timestamp,
     IST
@@ -60,22 +57,17 @@ class TickerProducer:
         """
         self.api_key = os.getenv('APIKEY')
         self.api_secret = os.getenv("APISECRET")
-        self.stocks = config.get_stocks_list()
         
-        # Build token mappings
-        nse_stock_to_token = stock_to_token_mapping('NSE')
-        bse_stock_to_token = stock_to_token_mapping('BSE')
+        # Initialize instrument mapper (handles all token mappings)
+        self.mapper = get_instrument_mapper()
         
-        # Get tokens for configured stocks from both exchanges
-        self.tokens = [
-            nse_stock_to_token[s] for s in self.stocks if s in nse_stock_to_token
-        ] + [
-            bse_stock_to_token[s] for s in self.stocks if s in bse_stock_to_token
-        ]
+        # Refresh if needed
+        needs_refresh, _ = self.mapper.needs_refresh()
+        if needs_refresh:
+            self.mapper.refresh()
         
-        # Reverse mappings (token -> symbol)
-        self.nse = token_to_stock_mapping("NSE")
-        self.bse = token_to_stock_mapping("BSE")
+        # Get all tokens to subscribe (stocks + F&O)
+        self.tokens = self.mapper.get_all_tokens()
         
         # Redis client
         self.r = config.redis_client
@@ -83,20 +75,8 @@ class TickerProducer:
         # Get authentication
         self.access_token = Auth.getAuth()
         
-        # Add F&O tokens for indices
-        self._add_fno_tokens()
-        
         # WebSocket instance (created on open)
         self.kws = None
-
-    def _add_fno_tokens(self):
-        """Fetch and add F&O tokens for major indices (SENSEX, BANKEX, NIFTY)."""
-        try:
-            fno_mapping = get_fno_instruments()
-            self.nse.update(fno_mapping)
-            self.tokens.extend(fno_mapping.keys())
-        except Exception as e:
-            print(f"⚠️ Failed to fetch F&O instruments: {e}", flush=True)
 
     def _convert_token(self, token: int) -> str:
         """
@@ -108,7 +88,7 @@ class TickerProducer:
         Returns:
             str: "EXCHANGE:SYMBOL" format (e.g., "NSE:RELIANCE").
         """
-        return convert_token(token, self.nse, self.bse)
+        return self.mapper.convert_token(token)
 
     # =========================================================================
     # WEBSOCKET CALLBACKS
