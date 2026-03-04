@@ -105,6 +105,34 @@ class Consumer:
             stocks = config.get_stocks_list()
             self.r.hset('stocks', mapping={s: "0" for s in stocks})
 
+    def _check_redis_health(self) -> bool:
+        """
+        Verify Redis connection and stocks hash integrity.
+        
+        Returns:
+            bool: True if healthy, False otherwise.
+        """
+        try:
+            # Check connection
+            self.r.ping()
+            
+            # Check if stocks hash exists and has expected keys
+            if not self.r.exists('stocks'):
+                print("[ERROR] Redis: 'stocks' hash does not exist!", flush=True)
+                return False
+            
+            stocks_count = self.r.hlen('stocks')
+            expected_count = len(config.get_stocks_list())
+            
+            if stocks_count != expected_count:
+                print(f"[WARN] Redis: stocks hash has {stocks_count} keys, expected {expected_count}", flush=True)
+                return False
+            
+            return True
+        except Exception as e:
+            print(f"[ERROR] Redis health check failed: {e}", flush=True)
+            return False
+
     def _convert_token(self, token: int) -> Optional[str]:
         """Convert instrument token to EXCHANGE:SYMBOL format."""
         return self.mapper.convert_token(token)
@@ -157,8 +185,34 @@ class Consumer:
                 time.sleep(2)
                 continue
             
-            # Build stream offsets
-            offsets = self.r.hmget("stocks", my_stocks)
+            # Build stream offsets with defensive checks
+            try:
+                offsets = self.r.hmget("stocks", my_stocks)
+            except Exception as e:
+                print(f"[ERROR] Consumer {consumer_id}: Failed to retrieve offsets from Redis: {e}", flush=True)
+                time.sleep(1)
+                continue
+            
+            # Diagnose why we might have missing offsets
+            if not offsets or all(o is None for o in offsets):
+                print(f"[WARN] Consumer {consumer_id}: hmget returned empty/None for stocks {my_stocks}", flush=True)
+                print(f"[DIAG] Redis 'stocks' hash keys: {self.r.hkeys('stocks')}", flush=True)
+                print(f"[DIAG] Expected stocks: {my_stocks}", flush=True)
+                time.sleep(1)
+                continue
+            
+            # Check for partial failures (some stocks missing from hash)
+            missing_stocks = [stock for stock, offset in zip(my_stocks, offsets) if offset is None]
+            if missing_stocks:
+                print(f"[WARN] Consumer {consumer_id}: Missing offsets for {missing_stocks} in Redis hash", flush=True)
+                # Re-initialize missing stocks in Redis
+                try:
+                    for stock in missing_stocks:
+                        self.r.hset('stocks', stock, "0")
+                    print(f"[INFO] Consumer {consumer_id}: Re-initialized missing stocks", flush=True)
+                except Exception as e:
+                    print(f"[ERROR] Consumer {consumer_id}: Failed to re-initialize stocks: {e}", flush=True)
+            
             streams = {
                 stock: next_redis_stream_id(offset)
                 for stock, offset in zip(my_stocks, offsets)
@@ -166,7 +220,7 @@ class Consumer:
             }
             
             if not streams:
-                print(f"[CONSUMER {consumer_id}] No streams available, waiting...")
+                print(f"[CONSUMER {consumer_id}] No valid streams available, waiting...", flush=True)
                 time.sleep(1)
                 continue
             
@@ -369,8 +423,16 @@ class Consumer:
         Args:
             check_interval: Seconds between health checks.
         """
+        health_check_counter = 0
         while self.r.get('end') != 'true':
             time.sleep(check_interval)
+            
+            # Periodically check Redis health
+            health_check_counter += 1
+            if health_check_counter >= 5:  # Every ~55 seconds
+                if not self._check_redis_health():
+                    print("[ALERT] Redis health check failed! This may cause consumer failures.", flush=True)
+                health_check_counter = 0
             
             active_threads = {t.name for t in threading.enumerate()}
             
