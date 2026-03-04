@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
       - ${DATA_HOST_PATH:-.}/data:/data
     environment:
       - REDIS_HOST=redis
