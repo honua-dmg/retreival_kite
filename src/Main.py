@@ -151,6 +151,7 @@ def begin():
     the producer heartbeat monitor.
     """
     r = config.redis_client
+    m = config.memcache_client
     
     # Log active threads
     logger.info("Active threads:")
@@ -160,6 +161,12 @@ def begin():
     # Initialize Redis state
     r.set('end', 'false')
     r.set('time', get_ist_now().timestamp())
+
+    # Initialize Memcached offsets for tracked stocks
+    for stock in config.get_stocks_list():
+        cache_key = f"{config.OFFSETS_PREFIX}{stock}"
+        if m.get(cache_key) is None:
+            m.set(cache_key, "0")
     
     # Start consumers
     logger.info(f"Starting {config.DEFAULT_NUM_CONSUMERS} consumer threads...")
@@ -188,6 +195,7 @@ def end():
     Generates a report with data collection statistics and sends it via email.
     """
     r = config.redis_client
+    m = config.memcache_client
     load_dotenv(config.ENVLOC)
     
     date = get_ist_date()
@@ -221,8 +229,10 @@ def end():
     # Cleanup Redis if after market close
     if _is_after_market_close():
         r.set('end', 'true')
+        for stock in config.get_stocks_list():
+            m.delete(f"{config.OFFSETS_PREFIX}{stock}")
         r.flushall()
-        logger.info("Redis flushed after market close.")
+        logger.info("Redis flushed and Memcached offsets cleared after market close.")
 
 
 def upload_data():
@@ -253,6 +263,7 @@ def main():
     """
     load_dotenv(config.ENVLOC)
     r = config.redis_client
+    m = config.memcache_client
     
     logger.info("=" * 60)
     logger.info("Stock Market Data Collection System Starting")
@@ -274,6 +285,10 @@ def main():
         if r.dbsize() > 0:
             logger.info("Flushing Redis before market open...")
             r.flushall()
+
+        for stock in config.get_stocks_list():
+            m.delete(f"{config.OFFSETS_PREFIX}{stock}")
+        logger.info("Cleared Memcached offsets before market open.")
         
         time.sleep(sleep_time)
     

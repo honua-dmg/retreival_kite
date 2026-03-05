@@ -10,9 +10,12 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MEMCACHED_HOST=memcached
+      - MEMCACHED_PORT=11211
       - DATA_PATH=/data
     depends_on:
       - redis
+      - memcached
     networks:
       - app-network
 
@@ -23,6 +26,14 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+    networks:
+      - app-network
+
+  memcached:
+    image: memcached:1.6-alpine
+    ports:
+      - "11211:11211"
+    command: memcached -m 256 -c 1024
     networks:
       - app-network
 

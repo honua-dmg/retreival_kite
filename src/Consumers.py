@@ -88,50 +88,137 @@ class Consumer:
         
         # Redis client
         self.r = config.redis_client
+        self.m = config.memcache_client
         self.r.set('end', 'false')
+
+        self.tracked_stocks = config.get_stocks_list()
         
-        # Initialize stocks hash in Redis
-        self._init_stocks_hash()
+        # Initialize offsets in Memcached + Redis mirror
+        self._init_offsets_store()
         
         # Cleanup configuration
         self.cleanup_interval = config.CLEANUP_INTERVAL
         self.cleanup_lag = config.CLEANUP_LAG
 
-    def _init_stocks_hash(self):
-        """Initialize the stocks hash in Redis for tracking processed message IDs."""
-        print(f"[DEBUG] Stocks in Redis: {self.r.hkeys('stocks')}")
-        if not self.r.exists('stocks'):
-            print("[INFO] Initializing stocks in Redis...")
-            stocks = config.get_stocks_list()
-            self.r.hset('stocks', mapping={s: "0" for s in stocks})
+    def _offset_key(self, stock: str) -> str:
+        """Build Memcached key for stock offset."""
+        return f"{config.OFFSETS_PREFIX}{stock}"
+
+    def _decode_memcache_value(self, value) -> Optional[str]:
+        """Decode Memcached values into str offsets."""
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
+        return str(value)
+
+    def _init_offsets_store(self):
+        """
+        Initialize stock offsets in Memcached and Redis mirror.
+
+        Memcached is primary; Redis hash is a durability fallback.
+        """
+        if not self.tracked_stocks:
+            return
+
+        print("[INFO] Initializing offset stores (Memcached primary, Redis mirror)...", flush=True)
+
+        for stock in self.tracked_stocks:
+            try:
+                mem_key = self._offset_key(stock)
+                mem_val = self._decode_memcache_value(self.m.get(mem_key))
+
+                if mem_val is None:
+                    redis_val = self.r.hget('stocks', stock)
+                    bootstrap_val = redis_val if redis_val is not None else "0"
+                    self.m.set(mem_key, bootstrap_val)
+                    self.r.hset('stocks', stock, bootstrap_val)
+            except Exception as e:
+                print(f"[WARN] Failed to initialize offset for {stock}: {e}", flush=True)
+
+    def _get_offsets(self, stocks: List[str]) -> List[Optional[str]]:
+        """
+        Get offsets for stocks using Memcached primary and Redis fallback.
+
+        Args:
+            stocks: Stock symbols.
+
+        Returns:
+            list: Offset list aligned to input stocks.
+        """
+        offsets: List[Optional[str]] = []
+
+        for stock in stocks:
+            offset = None
+            mem_key = self._offset_key(stock)
+
+            try:
+                offset = self._decode_memcache_value(self.m.get(mem_key))
+            except Exception as e:
+                print(f"[WARN] Memcached read failed for {stock}: {e}", flush=True)
+
+            if offset is None:
+                try:
+                    offset = self.r.hget('stocks', stock)
+                    if offset is not None:
+                        self.m.set(mem_key, offset)
+                except Exception as e:
+                    print(f"[WARN] Redis fallback read failed for {stock}: {e}", flush=True)
+
+            if offset is None:
+                offset = "0"
+                try:
+                    self.m.set(mem_key, offset)
+                    self.r.hset('stocks', stock, offset)
+                except Exception as e:
+                    print(f"[WARN] Failed to seed missing offset for {stock}: {e}", flush=True)
+
+            offsets.append(offset)
+
+        return offsets
+
+    def _set_offset(self, stock: str, msg_id: str):
+        """Persist offset to Memcached primary and Redis mirror."""
+        try:
+            self.m.set(self._offset_key(stock), msg_id)
+        except Exception as e:
+            print(f"[WARN] Memcached write failed for {stock}: {e}", flush=True)
+
+        try:
+            self.r.hset('stocks', stock, msg_id)
+        except Exception as e:
+            print(f"[WARN] Redis mirror write failed for {stock}: {e}", flush=True)
+
+    def _get_all_stocks(self) -> List[str]:
+        """Get active stock universe from config with safe fallback."""
+        stocks = config.get_stocks_list()
+        return stocks if stocks else self.tracked_stocks
 
     def _check_redis_health(self) -> bool:
         """
-        Verify Redis connection and stocks hash integrity.
+        Verify Redis and Memcached connectivity.
         
         Returns:
             bool: True if healthy, False otherwise.
         """
         try:
-            # Check connection
             self.r.ping()
-            
-            # Check if stocks hash exists and has expected keys
-            if not self.r.exists('stocks'):
-                print("[ERROR] Redis: 'stocks' hash does not exist!", flush=True)
-                return False
-            
-            stocks_count = self.r.hlen('stocks')
-            expected_count = len(config.get_stocks_list())
-            
-            if stocks_count != expected_count:
-                print(f"[WARN] Redis: stocks hash has {stocks_count} keys, expected {expected_count}", flush=True)
-                return False
-            
-            return True
         except Exception as e:
             print(f"[ERROR] Redis health check failed: {e}", flush=True)
             return False
+
+        try:
+            test_key = "__offset_store_healthcheck__"
+            self.m.set(test_key, "ok", expire=2)
+            value = self._decode_memcache_value(self.m.get(test_key))
+            if value != "ok":
+                print("[ERROR] Memcached health check failed: bad echo value", flush=True)
+                return False
+        except Exception as e:
+            print(f"[ERROR] Memcached health check failed: {e}", flush=True)
+            return False
+
+        return True
 
     def _convert_token(self, token: int) -> Optional[str]:
         """Convert instrument token to EXCHANGE:SYMBOL format."""
@@ -185,33 +272,8 @@ class Consumer:
                 time.sleep(2)
                 continue
             
-            # Build stream offsets with defensive checks
-            try:
-                offsets = self.r.hmget("stocks", my_stocks)
-            except Exception as e:
-                print(f"[ERROR] Consumer {consumer_id}: Failed to retrieve offsets from Redis: {e}", flush=True)
-                time.sleep(1)
-                continue
-            
-            # Diagnose why we might have missing offsets
-            if not offsets or all(o is None for o in offsets):
-                print(f"[WARN] Consumer {consumer_id}: hmget returned empty/None for stocks {my_stocks}", flush=True)
-                print(f"[DIAG] Redis 'stocks' hash keys: {self.r.hkeys('stocks')}", flush=True)
-                print(f"[DIAG] Expected stocks: {my_stocks}", flush=True)
-                time.sleep(1)
-                continue
-            
-            # Check for partial failures (some stocks missing from hash)
-            missing_stocks = [stock for stock, offset in zip(my_stocks, offsets) if offset is None]
-            if missing_stocks:
-                print(f"[WARN] Consumer {consumer_id}: Missing offsets for {missing_stocks} in Redis hash", flush=True)
-                # Re-initialize missing stocks in Redis
-                try:
-                    for stock in missing_stocks:
-                        self.r.hset('stocks', stock, "0")
-                    print(f"[INFO] Consumer {consumer_id}: Re-initialized missing stocks", flush=True)
-                except Exception as e:
-                    print(f"[ERROR] Consumer {consumer_id}: Failed to re-initialize stocks: {e}", flush=True)
+            # Build stream offsets from Memcached primary + Redis fallback
+            offsets = self._get_offsets(my_stocks)
             
             streams = {
                 stock: next_redis_stream_id(offset)
@@ -243,7 +305,7 @@ class Consumer:
                         worker.save_tick(data)
                         
                         # Update last processed message ID
-                        self.r.hset('stocks', stock_name, msg_id)
+                        self._set_offset(stock_name, msg_id)
                         
                     except Exception as e:
                         print(f"[ERROR] Consumer {consumer_id} failed to process {msg_id}: {e}", flush=True)
@@ -293,8 +355,8 @@ class Consumer:
         
         # ===== CRITICAL SECTION: All consumers are paused =====
         try:
-            # Get stream sizes for all stocks
-            all_stocks = self.r.hkeys("stocks")
+            # Get stream sizes for all tracked stocks
+            all_stocks = self._get_all_stocks()
             stock_counts = []
             
             for stock in all_stocks:
@@ -394,8 +456,8 @@ class Consumer:
             print(f"[CLEANUP] Starting cleanup at {dt.datetime.now()}", flush=True)
             
             try:
-                for stock in self.r.hkeys('stocks'):
-                    last_id = self.r.hget('stocks', stock)
+                for stock in self._get_all_stocks():
+                    last_id = self._get_offsets([stock])[0]
                     
                     if not last_id or last_id == "0":
                         continue
@@ -462,34 +524,41 @@ class Consumer:
         
         print("[SCHEDULER] Shutting down.")
 
-    def _stocks_hash_watchdog(self):
+    def _offset_store_watchdog(self):
         """
-        Monitor the 'stocks' hash for unexpected deletion.
-        
-        If the hash disappears (e.g., due to accidental FLUSHALL),
-        this watchdog will detect it and alert the user.
+        Monitor offset store health and auto-recover from partial loss.
+
+        Memcached is primary and Redis hash is fallback mirror. This watchdog
+        alerts on degradation and rehydrates missing offsets instead of
+        hard-shutting down consumers.
         """
-        print("[WATCHDOG] Starting stocks hash monitor.")
-        key_existed = self.r.exists('stocks')
+        print("[WATCHDOG] Starting offset-store monitor.")
         
         while self.r.get('end') != 'true':
             time.sleep(1)
-            currently_exists = self.r.exists('stocks')
-            
-            if key_existed and not currently_exists:
+
+            if not self._check_redis_health():
                 timestamp = dt.datetime.now()
-                print(f"[CRITICAL] Stocks hash disappeared at {timestamp}!", flush=True)
+                print(f"[CRITICAL] Offset store unhealthy at {timestamp}!", flush=True)
                 report.send_email_alert(
-                    "🚨 STOCKS HASH DISAPPEARED",
-                    f"The 'stocks' Redis hash was deleted at {timestamp}. System shutting down."
+                    "🚨 OFFSET STORE DEGRADED",
+                    f"Offset store health check failed at {timestamp}. Auto-recovery will continue."
                 )
-                self.r.set('end', 'true')
-            
-            if not key_existed and currently_exists:
-                print(f"[INFO] Stocks hash reappeared at {dt.datetime.now()}", flush=True)
-            
-            key_existed = currently_exists
-        
+
+            # Rehydrate Memcached from Redis mirror when keys are missing
+            for stock in self._get_all_stocks():
+                try:
+                    mem_val = self._decode_memcache_value(self.m.get(self._offset_key(stock)))
+                    if mem_val is None:
+                        redis_val = self.r.hget('stocks', stock)
+                        if redis_val is not None:
+                            self.m.set(self._offset_key(stock), redis_val)
+                        else:
+                            self.m.set(self._offset_key(stock), "0")
+                            self.r.hset('stocks', stock, "0")
+                except Exception as e:
+                    print(f"[WARN] Watchdog failed to rehydrate offset for {stock}: {e}", flush=True)
+
         print("[WATCHDOG] Shutting down.")
 
     # =========================================================================
@@ -507,7 +576,7 @@ class Consumer:
         Save.CSV(self.directory).initialise()
         
         # Calculate initial stock assignments
-        stocks = self.r.hkeys("stocks")
+        stocks = self._get_all_stocks()
         stocks_per_consumer = math.ceil(len(stocks) / self.num_consumers)
         
         threads = []
@@ -531,7 +600,7 @@ class Consumer:
         threading.Thread(target=self._cleanup_loop, daemon=True, name="CleanupManager").start()
         threading.Thread(target=self._thread_monitor, daemon=True, name="ThreadMonitor").start()
         threading.Thread(target=self._scheduler_loop, daemon=True, name="Scheduler").start()
-        threading.Thread(target=self._stocks_hash_watchdog, daemon=True, name="StocksWatchdog").start()
+        threading.Thread(target=self._offset_store_watchdog, daemon=True, name="OffsetStoreWatchdog").start()
         
         return threads
 

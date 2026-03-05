@@ -12,6 +12,7 @@ Usage:
 
 import os
 import redis
+from pymemcache.client.base import Client as MemcacheClient
 from dotenv import load_dotenv
 
 
@@ -74,6 +75,14 @@ REDIS_HOST = os.getenv("REDIS_HOST", _DEFAULT_REDIS_HOST)
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
+# Auto-detect Memcached host: "memcached" in Docker, "localhost" locally
+_DEFAULT_MEMCACHED_HOST = "memcached" if IN_CONTAINER else "localhost"
+MEMCACHED_HOST = os.getenv("MEMCACHED_HOST", _DEFAULT_MEMCACHED_HOST)
+MEMCACHED_PORT = int(os.getenv("MEMCACHED_PORT", 11211))
+
+# Key namespace for stock offsets in Memcached
+OFFSETS_PREFIX = "stock_offset:"
+
 # Singleton Redis client - use this across all modules
 redis_client = redis.Redis(
     host=REDIS_HOST,
@@ -84,6 +93,14 @@ redis_client = redis.Redis(
 
 # Alias for backward compatibility
 r = redis_client
+
+# Singleton Memcached client - use for stock offsets
+memcache_client = MemcacheClient(
+    (MEMCACHED_HOST, MEMCACHED_PORT),
+    connect_timeout=1,
+    timeout=1,
+    no_delay=True,
+)
 
 # ============================================================================
 # APPLICATION CONFIGURATION
@@ -131,4 +148,19 @@ def is_redis_connected() -> bool:
         redis_client.ping()
         return True
     except redis.ConnectionError:
+        return False
+
+
+def is_memcache_connected() -> bool:
+    """
+    Check if Memcached connection is alive.
+
+    Returns:
+        bool: True if connected, False otherwise.
+    """
+    try:
+        memcache_client.set("__healthcheck__", "ok", expire=2)
+        value = memcache_client.get("__healthcheck__")
+        return value == b"ok"
+    except Exception:
         return False

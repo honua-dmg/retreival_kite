@@ -101,6 +101,7 @@ class ConsumerTestBench:
         self.verbose = verbose
         self.test_results = {}
         self.r = config.redis_client
+        self.m = config.memcache_client
         self.num_consumers = num_consumers
         self.num_stocks = num_stocks
         
@@ -123,8 +124,11 @@ class ConsumerTestBench:
         """Clean up test data from Redis."""
         for stock in self.test_stocks:
             self.r.delete(stock)
+            self.m.delete(f"{config.OFFSETS_PREFIX}{stock}")
         self.r.delete("__test_stocks__")
         self.r.delete("__test_stream__")
+        self.m.delete("__test_memcache_key__")
+        self.m.delete(f"{config.OFFSETS_PREFIX}__test_flow_stream__")
     
     # =========================================================================
     # REDIS CONNECTIVITY TESTS
@@ -149,48 +153,54 @@ class ConsumerTestBench:
             self._record_result("redis_connection", False, f"Redis error: {e}")
             return False
     
-    def test_redis_hash_operations(self) -> bool:
+    def test_offset_store_operations(self) -> bool:
         """
-        Test Redis hash operations (HSET, HGET, HMGET, HKEYS).
+        Test Memcached-primary offset operations with Redis mirror fallback.
         
         Returns:
-            bool: True if hash operations work, False otherwise.
+            bool: True if operations work, False otherwise.
         """
-        self._log("Testing Redis hash operations...", "TEST")
+        self._log("Testing offset store operations...", "TEST")
         try:
-            test_hash = "__test_stocks__"
-            
-            # Test HSET
-            self.r.hset(test_hash, mapping={s: "0" for s in self.test_stocks[:5]})
-            self._record_result("redis_hset", True, "HSET successful")
-            
-            # Test HGET
-            value = self.r.hget(test_hash, self.test_stocks[0])
+            test_stock = self.test_stocks[0]
+            cache_key = f"{config.OFFSETS_PREFIX}{test_stock}"
+
+            # Set primary offset in Memcached
+            self.m.set(cache_key, "0")
+            self.r.hset("stocks", test_stock, "0")
+            self._record_result("offset_set", True, "Offset set successful")
+
+            # Read from Memcached
+            value = self.m.get(cache_key)
+            value = value.decode("utf-8") if isinstance(value, bytes) else value
             if value != "0":
-                self._record_result("redis_hget", False, f"HGET returned {value} instead of '0'")
+                self._record_result("offset_get_memcached", False, f"Memcached get returned {value} instead of '0'")
                 return False
-            self._record_result("redis_hget", True, "HGET successful")
-            
-            # Test HMGET
-            values = self.r.hmget(test_hash, self.test_stocks[:3])
-            if len(values) != 3:
-                self._record_result("redis_hmget", False, f"HMGET returned {len(values)} values")
+            self._record_result("offset_get_memcached", True, "Memcached get successful")
+
+            # Fallback behavior: clear Memcached, read from Redis mirror
+            self.m.delete(cache_key)
+            mirror_value = self.r.hget("stocks", test_stock)
+            if mirror_value != "0":
+                self._record_result("offset_get_redis_fallback", False, f"Redis fallback returned {mirror_value}")
                 return False
-            self._record_result("redis_hmget", True, "HMGET successful")
-            
-            # Test HKEYS
-            keys = self.r.hkeys(test_hash)
-            if len(keys) != 5:
-                self._record_result("redis_hkeys", False, f"HKEYS returned {len(keys)} keys")
+            self._record_result("offset_get_redis_fallback", True, "Redis fallback successful")
+
+            # Restore from fallback source
+            self.m.set(cache_key, mirror_value)
+            restored = self.m.get(cache_key)
+            restored = restored.decode("utf-8") if isinstance(restored, bytes) else restored
+            if restored != "0":
+                self._record_result("offset_rehydrate", False, f"Offset rehydrate returned {restored}")
                 return False
-            self._record_result("redis_hkeys", True, "HKEYS successful")
-            
-            # Cleanup
-            self.r.delete(test_hash)
+            self._record_result("offset_rehydrate", True, "Offset rehydrate successful")
+
+            self.m.delete(cache_key)
+            self.r.hdel("stocks", test_stock)
             return True
             
         except Exception as e:
-            self._record_result("redis_hash", False, f"Hash operation error: {e}")
+            self._record_result("offset_store", False, f"Offset store operation error: {e}")
             return False
     
     def test_redis_stream_consumer_ops(self) -> bool:
@@ -705,17 +715,19 @@ class ConsumerTestBench:
         self._log("Testing full consumer flow...", "TEST")
         try:
             test_stream = "__test_flow_stream__"
-            test_hash = "__test_flow_offsets__"
+            cache_key = f"{config.OFFSETS_PREFIX}{test_stream}"
             
             # Initialize
-            self.r.hset(test_hash, test_stream, "0")
+            self.m.set(cache_key, "0")
+            self.r.hset("stocks", test_stream, "0")
             
             # Add messages
             for i in range(5):
                 self.r.xadd(test_stream, {"data": json.dumps({"tick": i})})
             
             # Simulate consumer read
-            offset = self.r.hget(test_hash, test_stream)
+            offset = self.m.get(cache_key)
+            offset = offset.decode("utf-8") if isinstance(offset, bytes) else offset
             messages = self.r.xread({test_stream: offset if offset != "0" else "0"}, count=10)
             
             if not messages:
@@ -730,10 +742,12 @@ class ConsumerTestBench:
                     last_msg_id = msg_id
             
             if last_msg_id:
-                self.r.hset(test_hash, test_stream, last_msg_id)
+                self.m.set(cache_key, last_msg_id)
+                self.r.hset("stocks", test_stream, last_msg_id)
             
             # Verify offset updated
-            new_offset = self.r.hget(test_hash, test_stream)
+            new_offset = self.m.get(cache_key)
+            new_offset = new_offset.decode("utf-8") if isinstance(new_offset, bytes) else new_offset
             if new_offset == "0":
                 self._record_result("consumer_flow", False, "Offset not updated")
                 return False
@@ -743,7 +757,8 @@ class ConsumerTestBench:
             
             # Cleanup
             self.r.delete(test_stream)
-            self.r.delete(test_hash)
+            self.m.delete(cache_key)
+            self.r.hdel("stocks", test_stream)
             return True
             
         except Exception as e:
@@ -762,7 +777,7 @@ class ConsumerTestBench:
         
         test_methods = [
             ("Redis Connection", self.test_redis_connection),
-            ("Redis Hash Operations", self.test_redis_hash_operations),
+            ("Offset Store Operations", self.test_offset_store_operations),
             ("Redis Stream Consumer Ops", self.test_redis_stream_consumer_ops),
             ("Even Distribution", self.test_even_distribution),
             ("Greedy Load Balancing", self.test_greedy_load_balancing),
@@ -809,7 +824,7 @@ class ConsumerTestBench:
         self._log("Running Redis tests...", "TEST")
         
         self.test_redis_connection()
-        self.test_redis_hash_operations()
+        self.test_offset_store_operations()
         self.test_redis_stream_consumer_ops()
         
         return self.test_results

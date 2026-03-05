@@ -2,6 +2,7 @@ selenium==4.32.0
 kiteconnect==5.0.1
 pyotp==2.9.0
 redis==6.1.0
+pymemcache==4.0.0
 python-dotenv==1.1.0
 pandas==2.2.3
 numpy==2.2.5
