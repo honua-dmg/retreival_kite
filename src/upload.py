@@ -109,7 +109,12 @@ class Upload:
                 # Build paths
                 local_path = os.path.join(root, filename)
                 s3_path = os.path.relpath(local_path, self.local_dir).replace("\\", "/")
-                
+
+                # Avoid accidental bucket-name duplication in object key
+                bucket_prefix = f"{self.bucket}/"
+                if s3_path.startswith(bucket_prefix):
+                    s3_path = s3_path[len(bucket_prefix):]
+
                 try:
                     print(f"📤 Uploading {local_path} → s3://{self.bucket}/{s3_path}", flush=True)
                     self.client.upload_file(local_path, self.bucket, s3_path)
