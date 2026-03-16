@@ -93,7 +93,7 @@ class Consumer:
 
         self.tracked_stocks = config.get_stocks_list()
         
-        # Initialize offsets in Memcached + Redis mirror
+        # Initialize offsets in Memcached
         self._init_offsets_store()
         
         # Cleanup configuration
@@ -114,14 +114,12 @@ class Consumer:
 
     def _init_offsets_store(self):
         """
-        Initialize stock offsets in Memcached and Redis mirror.
-
-        Memcached is primary; Redis hash is a durability fallback.
+        Initialize stock offsets in Memcached.
         """
         if not self.tracked_stocks:
             return
 
-        print("[INFO] Initializing offset stores (Memcached primary, Redis mirror)...", flush=True)
+        print("[INFO] Initializing offset store in Memcached...", flush=True)
 
         for stock in self.tracked_stocks:
             try:
@@ -129,16 +127,13 @@ class Consumer:
                 mem_val = self._decode_memcache_value(self.m.get(mem_key))
 
                 if mem_val is None:
-                    redis_val = self.r.hget('stocks', stock)
-                    bootstrap_val = redis_val if redis_val is not None else "0"
-                    self.m.set(mem_key, bootstrap_val)
-                    self.r.hset('stocks', stock, bootstrap_val)
+                    self.m.set(mem_key, "0")
             except Exception as e:
                 print(f"[WARN] Failed to initialize offset for {stock}: {e}", flush=True)
 
     def _get_offsets(self, stocks: List[str]) -> List[Optional[str]]:
         """
-        Get offsets for stocks using Memcached primary and Redis fallback.
+        Get offsets for stocks from Memcached.
 
         Args:
             stocks: Stock symbols.
@@ -158,18 +153,9 @@ class Consumer:
                 print(f"[WARN] Memcached read failed for {stock}: {e}", flush=True)
 
             if offset is None:
-                try:
-                    offset = self.r.hget('stocks', stock)
-                    if offset is not None:
-                        self.m.set(mem_key, offset)
-                except Exception as e:
-                    print(f"[WARN] Redis fallback read failed for {stock}: {e}", flush=True)
-
-            if offset is None:
                 offset = "0"
                 try:
                     self.m.set(mem_key, offset)
-                    self.r.hset('stocks', stock, offset)
                 except Exception as e:
                     print(f"[WARN] Failed to seed missing offset for {stock}: {e}", flush=True)
 
@@ -178,16 +164,11 @@ class Consumer:
         return offsets
 
     def _set_offset(self, stock: str, msg_id: str):
-        """Persist offset to Memcached primary and Redis mirror."""
+        """Persist offset to Memcached."""
         try:
             self.m.set(self._offset_key(stock), msg_id)
         except Exception as e:
             print(f"[WARN] Memcached write failed for {stock}: {e}", flush=True)
-
-        try:
-            self.r.hset('stocks', stock, msg_id)
-        except Exception as e:
-            print(f"[WARN] Redis mirror write failed for {stock}: {e}", flush=True)
 
     def _get_all_stocks(self) -> List[str]:
         """Get active stock universe from config with safe fallback."""
@@ -272,7 +253,7 @@ class Consumer:
                 time.sleep(2)
                 continue
             
-            # Build stream offsets from Memcached primary + Redis fallback
+            # Build stream offsets from Memcached
             offsets = self._get_offsets(my_stocks)
             
             streams = {
@@ -528,9 +509,8 @@ class Consumer:
         """
         Monitor offset store health and auto-recover from partial loss.
 
-        Memcached is primary and Redis hash is fallback mirror. This watchdog
-        alerts on degradation and rehydrates missing offsets instead of
-        hard-shutting down consumers.
+        This watchdog alerts on degradation and reseeds missing Memcached
+        offsets instead of hard-shutting down consumers.
         """
         print("[WATCHDOG] Starting offset-store monitor.")
         
@@ -545,19 +525,14 @@ class Consumer:
                     f"Offset store health check failed at {timestamp}. Auto-recovery will continue."
                 )
 
-            # Rehydrate Memcached from Redis mirror when keys are missing
+            # Reseed missing Memcached offsets with the default starting ID
             for stock in self._get_all_stocks():
                 try:
                     mem_val = self._decode_memcache_value(self.m.get(self._offset_key(stock)))
                     if mem_val is None:
-                        redis_val = self.r.hget('stocks', stock)
-                        if redis_val is not None:
-                            self.m.set(self._offset_key(stock), redis_val)
-                        else:
-                            self.m.set(self._offset_key(stock), "0")
-                            self.r.hset('stocks', stock, "0")
+                        self.m.set(self._offset_key(stock), "0")
                 except Exception as e:
-                    print(f"[WARN] Watchdog failed to rehydrate offset for {stock}: {e}", flush=True)
+                    print(f"[WARN] Watchdog failed to reseed offset for {stock}: {e}", flush=True)
 
         print("[WATCHDOG] Shutting down.")
 
