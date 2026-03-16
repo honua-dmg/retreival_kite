@@ -155,7 +155,7 @@ class ConsumerTestBench:
     
     def test_offset_store_operations(self) -> bool:
         """
-        Test Memcached-primary offset operations with Redis mirror fallback.
+        Test Memcached-only offset operations.
         
         Returns:
             bool: True if operations work, False otherwise.
@@ -165,9 +165,8 @@ class ConsumerTestBench:
             test_stock = self.test_stocks[0]
             cache_key = f"{config.OFFSETS_PREFIX}{test_stock}"
 
-            # Set primary offset in Memcached
+            # Set offset in Memcached
             self.m.set(cache_key, "0")
-            self.r.hset("stocks", test_stock, "0")
             self._record_result("offset_set", True, "Offset set successful")
 
             # Read from Memcached
@@ -178,16 +177,16 @@ class ConsumerTestBench:
                 return False
             self._record_result("offset_get_memcached", True, "Memcached get successful")
 
-            # Fallback behavior: clear Memcached, read from Redis mirror
+            # Missing offset should be clear after deletion
             self.m.delete(cache_key)
-            mirror_value = self.r.hget("stocks", test_stock)
-            if mirror_value != "0":
-                self._record_result("offset_get_redis_fallback", False, f"Redis fallback returned {mirror_value}")
+            missing_value = self.m.get(cache_key)
+            if missing_value is not None:
+                self._record_result("offset_missing_after_delete", False, f"Memcached still returned {missing_value}")
                 return False
-            self._record_result("offset_get_redis_fallback", True, "Redis fallback successful")
+            self._record_result("offset_missing_after_delete", True, "Memcached delete successful")
 
-            # Restore from fallback source
-            self.m.set(cache_key, mirror_value)
+            # Restore directly in Memcached
+            self.m.set(cache_key, "0")
             restored = self.m.get(cache_key)
             restored = restored.decode("utf-8") if isinstance(restored, bytes) else restored
             if restored != "0":
@@ -196,7 +195,6 @@ class ConsumerTestBench:
             self._record_result("offset_rehydrate", True, "Offset rehydrate successful")
 
             self.m.delete(cache_key)
-            self.r.hdel("stocks", test_stock)
             return True
             
         except Exception as e:
@@ -719,7 +717,6 @@ class ConsumerTestBench:
             
             # Initialize
             self.m.set(cache_key, "0")
-            self.r.hset("stocks", test_stream, "0")
             
             # Add messages
             for i in range(5):
@@ -743,7 +740,6 @@ class ConsumerTestBench:
             
             if last_msg_id:
                 self.m.set(cache_key, last_msg_id)
-                self.r.hset("stocks", test_stream, last_msg_id)
             
             # Verify offset updated
             new_offset = self.m.get(cache_key)
@@ -758,7 +754,6 @@ class ConsumerTestBench:
             # Cleanup
             self.r.delete(test_stream)
             self.m.delete(cache_key)
-            self.r.hdel("stocks", test_stream)
             return True
             
         except Exception as e:
