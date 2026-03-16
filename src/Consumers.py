@@ -178,31 +178,6 @@ class Consumer:
         stocks = config.get_stocks_list()
         return stocks if stocks else self.tracked_stocks
 
-    def _check_redis_health(self) -> bool:
-        """
-        Verify Redis and Memcached connectivity.
-        
-        Returns:
-            bool: True if healthy, False otherwise.
-        """
-        try:
-            self.r.ping()
-        except Exception as e:
-            print(f"[ERROR] Redis health check failed: {e}", flush=True)
-            return False
-
-        try:
-            test_key = "__offset_store_healthcheck__"
-            self.health_memcache_client.set(test_key, "ok", expire=2)
-            value = self._decode_memcache_value(self.health_memcache_client.get(test_key))
-            if value != "ok":
-                print("[ERROR] Memcached health check failed: bad echo value", flush=True)
-                return False
-        except Exception as e:
-            print(f"[ERROR] Memcached health check failed: {e}", flush=True)
-            return False
-
-        return True
 
     def _convert_token(self, token: int) -> Optional[str]:
         """Convert instrument token to EXCHANGE:SYMBOL format."""
@@ -474,16 +449,8 @@ class Consumer:
         Args:
             check_interval: Seconds between health checks.
         """
-        health_check_counter = 0
         while self.r.get('end') != 'true':
             time.sleep(check_interval)
-            
-            # Periodically check Redis health
-            health_check_counter += 1
-            if health_check_counter >= 5:  # Every ~55 seconds
-                if not self._check_redis_health():
-                    print("[ALERT] Redis health check failed! This may cause consumer failures.", flush=True)
-                health_check_counter = 0
             
             active_threads = {t.name for t in threading.enumerate()}
             
@@ -525,13 +492,7 @@ class Consumer:
         while self.r.get('end') != 'true':
             time.sleep(1)
 
-            if not self._check_redis_health():
-                timestamp = dt.datetime.now()
-                print(f"[CRITICAL] Offset store unhealthy at {timestamp}!", flush=True)
-                report.send_email_alert(
-                    "🚨 OFFSET STORE DEGRADED",
-                    f"Offset store health check failed at {timestamp}. Auto-recovery will continue."
-                )
+
 
             # Reseed missing Memcached offsets with the default starting ID
             for stock in self._get_all_stocks():
