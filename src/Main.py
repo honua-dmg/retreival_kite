@@ -151,7 +151,7 @@ def begin():
     the producer heartbeat monitor.
     """
     r = config.redis_client
-    m = config.memcache_client
+    m = config.create_memcache_client()
     
     # Log active threads
     logger.info("Active threads:")
@@ -168,24 +168,30 @@ def begin():
         if m.get(cache_key) is None:
             m.set(cache_key, "0")
     
-    # Start consumers
-    logger.info(f"Starting {config.DEFAULT_NUM_CONSUMERS} consumer threads...")
-    consumer_threads = Consumers.start_consumer_threads(
-        config.DATA_PATH,
-        num_consumers=config.DEFAULT_NUM_CONSUMERS
-    )
-    
-    # Start producer with heartbeat monitoring (blocking)
-    logger.info("Starting producer heartbeat monitor...")
-    producer_thread = threading.Thread(target=producer.heartbeat_monitor)
-    producer_thread.start()
-    producer_thread.join()
-    
-    # Wait for consumers to finish
-    for thread in consumer_threads:
-        thread.join()
-    
-    logger.info("Data collection complete.")
+    try:
+        # Start consumers
+        logger.info(f"Starting {config.DEFAULT_NUM_CONSUMERS} consumer threads...")
+        consumer_threads = Consumers.start_consumer_threads(
+            config.DATA_PATH,
+            num_consumers=config.DEFAULT_NUM_CONSUMERS
+        )
+        
+        # Start producer with heartbeat monitoring (blocking)
+        logger.info("Starting producer heartbeat monitor...")
+        producer_thread = threading.Thread(target=producer.heartbeat_monitor)
+        producer_thread.start()
+        producer_thread.join()
+        
+        # Wait for consumers to finish
+        for thread in consumer_threads:
+            thread.join()
+        
+        logger.info("Data collection complete.")
+    finally:
+        try:
+            m.close()
+        except Exception:
+            pass
 
 
 def end():
@@ -195,7 +201,7 @@ def end():
     Generates a report with data collection statistics and sends it via email.
     """
     r = config.redis_client
-    m = config.memcache_client
+    m = config.create_memcache_client()
     load_dotenv(config.ENVLOC)
     
     date = get_ist_date()
@@ -226,13 +232,19 @@ def end():
     
     report.report(body)
     
-    # Cleanup Redis if after market close
-    if _is_after_market_close():
-        r.set('end', 'true')
-        for stock in config.get_stocks_list():
-            m.delete(f"{config.OFFSETS_PREFIX}{stock}")
-        r.flushall()
-        logger.info("Redis flushed and Memcached offsets cleared after market close.")
+    try:
+        # Cleanup Redis if after market close
+        if _is_after_market_close():
+            r.set('end', 'true')
+            for stock in config.get_stocks_list():
+                m.delete(f"{config.OFFSETS_PREFIX}{stock}")
+            r.flushall()
+            logger.info("Redis flushed and Memcached offsets cleared after market close.")
+    finally:
+        try:
+            m.close()
+        except Exception:
+            pass
 
 
 def upload_data():
@@ -263,7 +275,7 @@ def main():
     """
     load_dotenv(config.ENVLOC)
     r = config.redis_client
-    m = config.memcache_client
+    m = config.create_memcache_client()
     
     logger.info("=" * 60)
     logger.info("Stock Market Data Collection System Starting")
@@ -276,39 +288,45 @@ def main():
         logger.info("Market is closed today. Exiting.")
         return
     
-    # Wait for market open if needed
-    sleep_time = _seconds_until_market_open()
-    if sleep_time > 0:
-        logger.info(f"Waiting {sleep_time} seconds until market open (9:15 AM)...")
-        
-        # Flush Redis before market open
-        if r.dbsize() > 0:
-            logger.info("Flushing Redis before market open...")
-            r.flushall()
+    try:
+        # Wait for market open if needed
+        sleep_time = _seconds_until_market_open()
+        if sleep_time > 0:
+            logger.info(f"Waiting {sleep_time} seconds until market open (9:15 AM)...")
+            
+            # Flush Redis before market open
+            if r.dbsize() > 0:
+                logger.info("Flushing Redis before market open...")
+                r.flushall()
 
-        for stock in config.get_stocks_list():
-            m.delete(f"{config.OFFSETS_PREFIX}{stock}")
-        logger.info("Cleared Memcached offsets before market open.")
+            for stock in config.get_stocks_list():
+                m.delete(f"{config.OFFSETS_PREFIX}{stock}")
+            logger.info("Cleared Memcached offsets before market open.")
+            
+            time.sleep(sleep_time)
         
-        time.sleep(sleep_time)
-    
-    # Run data collection
-    logger.info("Starting data collection...")
-    begin()
-    
-    # Send report
-    logger.info("Sending end-of-day report...")
-    end()
-    
-    # Upload if after market close
-    if _is_after_market_close():
-        upload_data()
-    else:
-        logger.warning("Market not closed yet. Skipping upload.")
-    
-    logger.info("=" * 60)
-    logger.info("Data collection system shutdown complete.")
-    logger.info("=" * 60)
+        # Run data collection
+        logger.info("Starting data collection...")
+        begin()
+        
+        # Send report
+        logger.info("Sending end-of-day report...")
+        end()
+        
+        # Upload if after market close
+        if _is_after_market_close():
+            upload_data()
+        else:
+            logger.warning("Market not closed yet. Skipping upload.")
+        
+        logger.info("=" * 60)
+        logger.info("Data collection system shutdown complete.")
+        logger.info("=" * 60)
+    finally:
+        try:
+            m.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -94,13 +94,14 @@ redis_client = redis.Redis(
 # Alias for backward compatibility
 r = redis_client
 
-# Singleton Memcached client - use for stock offsets
-memcache_client = MemcacheClient(
-    (MEMCACHED_HOST, MEMCACHED_PORT),
-    connect_timeout=1,
-    timeout=1,
-    no_delay=True,
-)
+def create_memcache_client() -> MemcacheClient:
+    """Create a new Memcached client instance."""
+    return MemcacheClient(
+        (MEMCACHED_HOST, MEMCACHED_PORT),
+        connect_timeout=1,
+        timeout=1,
+        no_delay=True,
+    )
 
 # ============================================================================
 # APPLICATION CONFIGURATION
@@ -158,9 +159,17 @@ def is_memcache_connected() -> bool:
     Returns:
         bool: True if connected, False otherwise.
     """
+    client = None
     try:
-        memcache_client.set("__healthcheck__", "ok", expire=2)
-        value = memcache_client.get("__healthcheck__")
+        client = create_memcache_client()
+        client.set("__healthcheck__", "ok", expire=2)
+        value = client.get("__healthcheck__")
         return value == b"ok"
     except Exception:
         return False
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass

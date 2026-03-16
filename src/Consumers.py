@@ -88,7 +88,8 @@ class Consumer:
         
         # Redis client
         self.r = config.redis_client
-        self.m = config.memcache_client
+        # Dedicated client for control-plane operations (health checks/watchdog).
+        self.health_memcache_client = config.create_memcache_client()
         self.r.set('end', 'false')
 
         self.tracked_stocks = config.get_stocks_list()
@@ -124,14 +125,14 @@ class Consumer:
         for stock in self.tracked_stocks:
             try:
                 mem_key = self._offset_key(stock)
-                mem_val = self._decode_memcache_value(self.m.get(mem_key))
+                mem_val = self._decode_memcache_value(self.health_memcache_client.get(mem_key))
 
                 if mem_val is None:
-                    self.m.set(mem_key, "0")
+                    self.health_memcache_client.set(mem_key, "0")
             except Exception as e:
                 print(f"[WARN] Failed to initialize offset for {stock}: {e}", flush=True)
 
-    def _get_offsets(self, stocks: List[str]) -> List[Optional[str]]:
+    def _get_offsets(self, stocks: List[str], memcache_client=None) -> List[Optional[str]]:
         """
         Get offsets for stocks from Memcached.
 
@@ -142,20 +143,21 @@ class Consumer:
             list: Offset list aligned to input stocks.
         """
         offsets: List[Optional[str]] = []
+        client = memcache_client or self.health_memcache_client
 
         for stock in stocks:
             offset = None
             mem_key = self._offset_key(stock)
 
             try:
-                offset = self._decode_memcache_value(self.m.get(mem_key))
+                offset = self._decode_memcache_value(client.get(mem_key))
             except Exception as e:
                 print(f"[WARN] Memcached read failed for {stock}: {e}", flush=True)
 
             if offset is None:
                 offset = "0"
                 try:
-                    self.m.set(mem_key, offset)
+                    client.set(mem_key, offset)
                 except Exception as e:
                     print(f"[WARN] Failed to seed missing offset for {stock}: {e}", flush=True)
 
@@ -163,10 +165,11 @@ class Consumer:
 
         return offsets
 
-    def _set_offset(self, stock: str, msg_id: str):
+    def _set_offset(self, stock: str, msg_id: str, memcache_client=None):
         """Persist offset to Memcached."""
+        client = memcache_client or self.health_memcache_client
         try:
-            self.m.set(self._offset_key(stock), msg_id)
+            client.set(self._offset_key(stock), msg_id)
         except Exception as e:
             print(f"[WARN] Memcached write failed for {stock}: {e}", flush=True)
 
@@ -190,8 +193,8 @@ class Consumer:
 
         try:
             test_key = "__offset_store_healthcheck__"
-            self.m.set(test_key, "ok", expire=2)
-            value = self._decode_memcache_value(self.m.get(test_key))
+            self.health_memcache_client.set(test_key, "ok", expire=2)
+            value = self._decode_memcache_value(self.health_memcache_client.get(test_key))
             if value != "ok":
                 print("[ERROR] Memcached health check failed: bad echo value", flush=True)
                 return False
@@ -220,6 +223,7 @@ class Consumer:
             consumer_id: Unique identifier for this consumer thread.
         """
         worker = Save.CSV(self.directory)
+        memcache_client = config.create_memcache_client()
         
         while self.r.get('end') != 'true':
             # Check if rebalance is requested - synchronize with barrier
@@ -254,7 +258,7 @@ class Consumer:
                 continue
             
             # Build stream offsets from Memcached
-            offsets = self._get_offsets(my_stocks)
+            offsets = self._get_offsets(my_stocks, memcache_client=memcache_client)
             
             streams = {
                 stock: next_redis_stream_id(offset)
@@ -286,12 +290,16 @@ class Consumer:
                         worker.save_tick(data)
                         
                         # Update last processed message ID
-                        self._set_offset(stock_name, msg_id)
+                        self._set_offset(stock_name, msg_id, memcache_client=memcache_client)
                         
                     except Exception as e:
                         print(f"[ERROR] Consumer {consumer_id} failed to process {msg_id}: {e}", flush=True)
                         continue
         
+        try:
+            memcache_client.close()
+        except Exception:
+            pass
         print(f"[CONSUMER {consumer_id}] Shutting down.")
 
     # =========================================================================
@@ -528,9 +536,11 @@ class Consumer:
             # Reseed missing Memcached offsets with the default starting ID
             for stock in self._get_all_stocks():
                 try:
-                    mem_val = self._decode_memcache_value(self.m.get(self._offset_key(stock)))
+                    mem_val = self._decode_memcache_value(
+                        self.health_memcache_client.get(self._offset_key(stock))
+                    )
                     if mem_val is None:
-                        self.m.set(self._offset_key(stock), "0")
+                        self.health_memcache_client.set(self._offset_key(stock), "0")
                 except Exception as e:
                     print(f"[WARN] Watchdog failed to reseed offset for {stock}: {e}", flush=True)
 

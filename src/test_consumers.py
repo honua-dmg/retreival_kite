@@ -101,7 +101,7 @@ class ConsumerTestBench:
         self.verbose = verbose
         self.test_results = {}
         self.r = config.redis_client
-        self.m = config.memcache_client
+        self.m = config.create_memcache_client()
         self.num_consumers = num_consumers
         self.num_stocks = num_stocks
         
