@@ -39,6 +39,7 @@ from utils import (
 
 # CSV header columns
 CSV_HEADER = [
+    'msg_id',
     'timestamp', 'stonk', 'last_price', 'last_traded_quantity',
     'average_traded_price', 'volume_traded', 'total_buy_quantity', 'total_sell_quantity',
     'open', 'high', 'low', 'close', 'change', 'oi', 'oi_day_high', 'oi_day_low'
@@ -150,7 +151,7 @@ class CSV:
             self._init_columns(nse_file)
             self._init_columns(bse_file)
 
-    def save_tick(self, tick: Dict):
+    def save_tick(self, tick: Dict,msg_id="not provided"):
         """
         Save a single tick to the appropriate CSV file.
         
@@ -179,6 +180,7 @@ class CSV:
         
         # Build row data
         row = [
+            msg_id,
             timestamp,
             tick['instrument_token'],
             tick.get('last_price'),

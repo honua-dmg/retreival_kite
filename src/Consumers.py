@@ -99,6 +99,8 @@ class Consumer:
         # Cleanup configuration
         self.cleanup_interval = config.CLEANUP_INTERVAL
         self.cleanup_lag = config.CLEANUP_LAG
+        # Keep a small processed tail in Redis streams for observability/debugging.
+        self.cleanup_retain = 50
 
     def _offset_key(self, stock: str) -> str:
         """Build Memcached key for stock offset."""
@@ -186,6 +188,8 @@ class Consumer:
     # CONSUMER THREAD
     # =========================================================================
 
+
+
     def _csv_consumer(self, consumer_id: int):
         """
         Consumer thread that reads from Redis streams and saves to CSV.
@@ -261,7 +265,7 @@ class Consumer:
                             continue
                         
                         stock_name = converted.split(':')[1]
-                        worker.save_tick(data)
+                        worker.save_tick(data,msg_id) 
                         
                         # Update last processed message ID
                         self._set_offset(stock_name, msg_id, memcache_client=memcache_client)
@@ -269,7 +273,6 @@ class Consumer:
                     except Exception as e:
                         print(f"[ERROR] Consumer {consumer_id} failed to process {msg_id}: {e}", flush=True)
                         continue
-        
         try:
             memcache_client.close()
         except Exception:
@@ -429,11 +432,28 @@ class Consumer:
                     
                     if stream_length <= self.cleanup_lag:
                         continue
-                    
-                    # Trim stream up to last processed ID
-                    self.r.xtrim(stock, minid=last_id, approximate=True)
+
+                    trim_min_id = last_id
+                    if self.cleanup_retain > 0:
+                        # Retain roughly `cleanup_retain` processed entries ending at `last_id`.
+                        retained_window = self.r.xrevrange(
+                            stock,
+                            max=last_id,
+                            min='-',
+                            count=self.cleanup_retain
+                        )
+
+                        # If we have a full window, trim just before its oldest retained ID.
+                        if len(retained_window) == self.cleanup_retain:
+                            trim_min_id = retained_window[-1][0]
+
+                    self.r.xtrim(stock, minid=trim_min_id, approximate=True)
                     new_length = self.r.xlen(stock)
-                    print(f"[CLEANUP] Trimmed {stock}: {stream_length} -> {new_length}", flush=True)
+                    print(
+                        f"[CLEANUP] Trimmed {stock}: {stream_length} -> {new_length} "
+                        f"(retain~{self.cleanup_retain})",
+                        flush=True
+                    )
                     
             except Exception as e:
                 print(f"[ERROR] Cleanup failed: {e}", flush=True)
@@ -546,7 +566,6 @@ class Consumer:
         threading.Thread(target=self._thread_monitor, daemon=True, name="ThreadMonitor").start()
         threading.Thread(target=self._scheduler_loop, daemon=True, name="Scheduler").start()
         threading.Thread(target=self._offset_store_watchdog, daemon=True, name="OffsetStoreWatchdog").start()
-        
         return threads
 
 
