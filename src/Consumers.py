@@ -11,6 +11,7 @@ Functions:
     - start_consumer_threads: Initialize and start all consumer threads
 """
 
+"""bonjour"""
 import os
 import json
 import time
