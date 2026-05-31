@@ -150,7 +150,9 @@ class CSV:
             self._init_columns(nse_file)
             self._init_columns(bse_file)
 
-    def save_tick(self, tick: Dict):
+
+
+    def process_tick(self, tick: Dict):
         """
         Save a single tick to the appropriate CSV file.
         
@@ -215,6 +217,19 @@ class CSV:
             else:
                 row.extend([None, None, None])
         
+        return row, file_path
+    def save_tick(self, tick: Dict):
+        """
+        Public method to save a tick, ensuring thread safety.
+        
+        Args:
+            tick: Dictionary containing tick data from KiteTicker.
+        """
+        processed = self.process_tick(tick)
+        if processed is None:
+            return
+
+        row, file_path = processed
         # Get or create lock for this file
         with self._locks_lock:
             if file_path not in self._file_locks:
