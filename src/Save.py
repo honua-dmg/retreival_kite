@@ -39,8 +39,7 @@ from utils import (
 
 # CSV header columns
 CSV_HEADER = [
-    'msg_id',
-    'timestamp', 'stonk', 'last_price', 'last_traded_quantity',
+    'timestamp', 'stonk', 'stream_offset', 'last_price', 'last_traded_quantity',
     'average_traded_price', 'volume_traded', 'total_buy_quantity', 'total_sell_quantity',
     'open', 'high', 'low', 'close', 'change', 'oi', 'oi_day_high', 'oi_day_low'
 ]
@@ -151,13 +150,16 @@ class CSV:
             self._init_columns(nse_file)
             self._init_columns(bse_file)
 
-    def save_tick(self, tick: Dict,msg_id="not provided"):
+
+
+    def process_tick(self, tick: Dict, stream_offset: Optional[str] = None):
         """
         Save a single tick to the appropriate CSV file.
-        
+
         Args:
             tick: Dictionary containing tick data from KiteTicker.
                   Expected keys: instrument_token, last_price, ohlc, depth, etc.
+            stream_offset: Redis stream key the tick was read from.
         """
         # Get exchange and stock from token
         converted = self._convert_token(tick['instrument_token'])
@@ -183,6 +185,7 @@ class CSV:
             msg_id,
             timestamp,
             tick['instrument_token'],
+            stream_offset,
             tick.get('last_price'),
             tick.get('last_traded_quantity'),
             tick.get('average_traded_price'),
@@ -217,6 +220,20 @@ class CSV:
             else:
                 row.extend([None, None, None])
         
+        return row, file_path
+    def save_tick(self, tick: Dict, stream_offset: Optional[str] = None):
+        """
+        Public method to save a tick, ensuring thread safety.
+
+        Args:
+            tick: Dictionary containing tick data from KiteTicker.
+            stream_offset: Redis stream key the tick was read from.
+        """
+        processed = self.process_tick(tick, stream_offset=stream_offset)
+        if processed is None:
+            return
+
+        row, file_path = processed
         # Get or create lock for this file
         with self._locks_lock:
             if file_path not in self._file_locks:

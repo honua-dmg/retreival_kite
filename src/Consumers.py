@@ -265,7 +265,7 @@ class Consumer:
                             continue
                         
                         stock_name = converted.split(':')[1]
-                        worker.save_tick(data,msg_id) 
+                        worker.save_tick(data, stream_offset=msg_id)
                         
                         # Update last processed message ID
                         self._set_offset(stock_name, msg_id, memcache_client=memcache_client)
