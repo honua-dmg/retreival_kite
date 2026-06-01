@@ -182,7 +182,6 @@ class CSV:
         
         # Build row data
         row = [
-            msg_id,
             timestamp,
             tick['instrument_token'],
             stream_offset,
